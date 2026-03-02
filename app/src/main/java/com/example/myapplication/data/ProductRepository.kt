@@ -8,15 +8,25 @@ class ProductRepository(private val productDao: ProductDao) {
     
     suspend fun getProductByBarcode(barcode: String): Product? = productDao.getProductByBarcode(barcode)
     
-    suspend fun insertProduct(product: Product) = productDao.insertProduct(product)
+    suspend fun insertProduct(product: Product) { productDao.insertProduct(product)
+        cachedProducts=getAllProducts().first()
+    }
     
-    suspend fun updateProduct(product: Product) = productDao.updateProduct(product)
+    suspend fun updateProduct(product: Product) {
+        productDao.updateProduct(product)
+        cachedProducts=getAllProducts().first()
+    }
     
-    suspend fun deleteProduct(barcode: String) = productDao.deleteProduct(barcode)
+    suspend fun deleteProduct(barcode: String) {
+        productDao.deleteProduct(barcode)
+        cachedProducts=getAllProducts().first()
+    }
 
 
     suspend fun searchProducts(query: String) = productDao.searchProductsByName(query)
 
+
+    private var cachedProducts: List<Product>? = null
     suspend fun searchProductsByCharacters(query: String): List<Product> {
         // 1. 检查查询是否有效
         if (query.isBlank()) {
@@ -29,32 +39,32 @@ class ProductRepository(private val productDao: ProductDao) {
             return emptyList()
         }
 
+        if(cachedProducts==null){
+            cachedProducts=getAllProducts().first()
+        }
 
-        val allProducts = getAllProductsDirect(tokens.first())
+        val allProducts = cachedProducts
 
-        // 5. 在内存中过滤：查找包含所有 tokens 的商品
-        val results = allProducts.filter { product ->
+
+        val results = allProducts?.filter { product ->
             val productName = product.name
             val barcode=product.barcode
-            tokens.all { token ->
-                matchesToken(productName, token,barcode)
+            tokens.any { token ->
+                matchesNum(productName, token,barcode)
             }
         }
-        if(results.isEmpty()){
-            val results = allProducts.filter { product ->
-                val productName = product.name
-                val barcode=product.barcode
-                tokens.all { token ->
-                    matchesNum(productName, token,barcode)
-                }
-            }
-            return results.sortedWith(compareByDescending<Product> { product ->
-                calculateMatchScore(product, tokens)
-            }.thenBy { it.name.length })
-        }
+       return results
+           ?.map { product ->
+               // 预先计算一次，将结果缓存起来
+               product to calculateMatchScore(product, tokens)
+           }
+           ?.sortedWith(
+               compareByDescending<Pair<Product, Pair<Int, Int>>> { it.second.first }
+                   .thenByDescending { it.second.second }
+                   .thenBy { it.first.name.length }
+           )
+           ?.map { it.first } ?: emptyList()
 
-        // 6. 排序：匹配度高的排在前面
-        return results
     }
 
     /**
@@ -97,7 +107,7 @@ class ProductRepository(private val productDao: ProductDao) {
             return Regex(pattern).containsMatchIn(productName)
         } else {
             // 非数字 token，直接包含匹配
-            return true
+            return productName.contains(token)
         }
     }
 
@@ -138,18 +148,18 @@ class ProductRepository(private val productDao: ProductDao) {
     /**
      * 计算匹配分数
      */
-    private fun calculateMatchScore(product: Product, tokens: List<String>): Int {
+    private fun calculateMatchScore(product: Product, tokens: List<String>): Pair<Int, Int> {
         val productName = product.name
         var score = 0
 
         tokens.forEach { token ->
             if (productName.contains(token)) {
-                score += 10
+                score += 1000
 
             }
         }
 
-        return score
+        return Pair(score, score / productName.length)
     }
 }
 
