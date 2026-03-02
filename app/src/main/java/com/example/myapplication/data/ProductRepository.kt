@@ -29,8 +29,7 @@ class ProductRepository(private val productDao: ProductDao) {
             return emptyList()
         }
 
-        //TODO:优化存储
-        // 4. 获取所有商品
+
         val allProducts = getAllProductsDirect(tokens.first())
 
         // 5. 在内存中过滤：查找包含所有 tokens 的商品

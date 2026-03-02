@@ -45,9 +45,7 @@ class DatabaseImporter(private val context: Context) {
                     while (it.moveToNext()) {
                         val barcode = it.getString(0) ?: ""
                         val name = it.getString(1) ?: ""
-                        // 使用 DecimalFormat 或直接格式化来保留精确值
-                        //TODO:修改这里
-//                        val priceString =it.getDouble(2).toString()
+
                         val priceString = it.getString(2)?:""
                         val price = BigDecimal(priceString)
 
