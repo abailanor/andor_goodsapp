@@ -17,6 +17,8 @@ import com.example.myapplication.data.PendingOrderStorage
 import com.example.myapplication.data.Product
 import com.example.myapplication.data.ProductRepository
 import com.example.myapplication.util.AssetsSoundPlayer
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +29,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.regex.Pattern
+import kotlin.coroutines.cancellation.CancellationException
 
 class OrderViewModel(
     private val repository: ProductRepository,
@@ -89,8 +92,6 @@ class OrderViewModel(
     private val _searchResults = MutableStateFlow<List<Product>>(emptyList())
     val searchResults: StateFlow<List<Product>> = _searchResults.asStateFlow()
 
-    private val _isSearching = MutableStateFlow(true)
-    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
 
 
     // 在类中添加这些方法
@@ -108,10 +109,10 @@ class OrderViewModel(
         return pattern.matcher(text).find()
     }
     // 商品搜索
+    private var searchJob: Job? = null
     fun searchProducts(query: String) {
         if (query.isEmpty()) {
             _searchResults.value = emptyList()
-            _isSearching.value = false
             return
         }
 
@@ -119,11 +120,9 @@ class OrderViewModel(
         val isNumeric = query.matches(Regex("\\d+"))
         if (isNumeric && !containsChinese(query)) {
             _searchResults.value = emptyList()
-            _isSearching.value = false
             return
         }
 
-        _isSearching.value = true
         viewModelScope.launch {
             try {
                 val results = repository.searchProductsByCharacters(query)
@@ -139,7 +138,6 @@ class OrderViewModel(
                 _message.value = "查询失败: ${e.message}"
                 _searchResults.value = emptyList()
             } finally {
-                _isSearching.value = false
             }
         }
     }
@@ -147,7 +145,6 @@ class OrderViewModel(
     // 清空搜索结果
     fun clearSearchResults() {
         _searchResults.value = emptyList()
-        _isSearching.value = false
     }
 
     // 添加商品（从搜索结果中选择）

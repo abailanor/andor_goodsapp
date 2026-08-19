@@ -65,9 +65,10 @@ class DatabaseImporter(private val context: Context) {
 
 
                 // 批量插入新数据
-                products.forEach { product ->
-                    productDao.insertProduct(product)
-                }
+//                products.forEach { product ->
+//                    productDao.insertProduct(product)
+//                }
+                productDao.insertProducts(products)
 
                 ImportResult.Success(products.size)
 

@@ -208,6 +208,8 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
                         _message.value = "数据库导入成功！共 ${result.importedCount} 条记录。"
                         // 重新加载产品列表
                         loadProducts()
+                        _isSharing.value=false
+                        _isRequesting.value=false
                     }
                     is ImportResult.Error -> {
                         _message.value = "导入失败: ${result.message}"
@@ -331,7 +333,7 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
      */
     fun toggleSharing() {
         val service = dataShareService ?: return
-        if (service.isSharing()) {
+        if (service.isSharing() || _isSharing.value==true) {
             service.stopSharing()
             _isSharing.value = false
         } else {
@@ -342,36 +344,22 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
     }
 
     /**
-     * 切换数据请求状态（请求/取消）
+     * 发送数据
      */
-    fun toggleRequesting() {
+    fun toggleSending() {
         val service = dataShareService ?: return
-        if (service.isRequesting()) {
+        if (service.isRequesting() || isRequesting.value == true) {
             service.stopRequesting()
             _isRequesting.value = false
         } else {
             // 开始请求数据
-            val targetIp = _targetIpAddress.value.trim()
-            if (targetIp.isBlank()) {
-                _message.value = "请输入对方IP地址"
-                return
-            }
-            try {
-                val address = java.net.InetAddress.getByName(targetIp)
-                service.startRequesting(address)
-                _isRequesting.value = true
-            } catch (e: Exception) {
-                _message.value = "无效的IP地址: ${e.message}"
-            }
+            service.startRequesting()
+            _isRequesting.value = true
+
         }
     }
 
-    /**
-     * 设置目标IP地址
-     */
-    fun setTargetIpAddress(ip: String) {
-        _targetIpAddress.value = ip
-    }
+
 
     /**
      * 释放数据共享服务资源

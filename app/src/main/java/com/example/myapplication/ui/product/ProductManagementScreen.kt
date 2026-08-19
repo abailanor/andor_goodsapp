@@ -554,8 +554,6 @@ fun ImportDatabaseScreen(
     val isSharing by viewModel.isSharing.collectAsState()
     val isRequesting by viewModel.isRequesting.collectAsState()
     val shareStatus by viewModel.shareStatus.collectAsState()
-    val localIpAddress by viewModel.localIpAddress.collectAsState()
-    val targetIpAddress by viewModel.targetIpAddress.collectAsState()
 
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var ipInput by remember { mutableStateOf("") }
@@ -596,15 +594,7 @@ fun ImportDatabaseScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                OutlinedButton(
-                    onClick = {
-                        filePickerLauncher.launch(arrayOf("application/x-sqlite3", "application/octet-stream", "*/*"))
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !isImporting
-                ) {
-                    Text(if (selectedFileName != null) "重新选择文件: $selectedFileName" else "选择数据库文件")
-                }
+
 
                 selectedFileName?.let { fileName ->
                     Text(
@@ -646,25 +636,15 @@ fun ImportDatabaseScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "数据共享",
+                    text = "数据接收",
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "通过热点与另一台设备同步数据库。确保两台设备已连接到同一热点。",
+                    text = "通过热点与另一台设备同步数据，确保自己开了热点，而且另一个人连着自己的热点。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // 本机IP显示
-                if (localIpAddress.isNotBlank()) {
-                    SelectionContainer {
-                        Text(
-                            text = "本机IP地址: $localIpAddress",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            )
-                    }
-                }
 
                 // 数据共享开关按钮
                 Button(
@@ -677,7 +657,7 @@ fun ImportDatabaseScreen(
                             MaterialTheme.colorScheme.primary
                     )
                 ) {
-                    Text(if (isSharing) "关闭数据共享" else "打开数据共享")
+                    Text(if (isSharing) "关闭数据接受" else "开始数据接收")
                 }
 
                 // 状态显示
@@ -703,33 +683,32 @@ fun ImportDatabaseScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "请求共享数据",
+                    text = "发送数据",
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "向已开启数据共享的设备请求数据库。如果没有响应，5秒后自动重试。",
+                    text = "向已开启数据接收的设备发送数据库。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 // 目标IP输入
-                OutlinedTextField(
-                    value = ipInput,
-                    onValueChange = {
-                        ipInput = it
-                        viewModel.setTargetIpAddress(it)
-                    },
-                    label = { Text("对方IP地址") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    enabled = !isRequesting
-                )
+//                OutlinedTextField(
+//                    value = ipInput,
+//                    onValueChange = {
+//                        ipInput = it
+//                        viewModel.setTargetIpAddress(it)
+//                    },
+//                    label = { Text("对方IP地址") },
+//                    modifier = Modifier.fillMaxWidth(),
+//                    singleLine = true,
+//                    enabled = !isRequesting
+//                )
 
                 // 请求按钮
                 Button(
                     onClick = {
-                        viewModel.setTargetIpAddress(ipInput)
-                        viewModel.toggleRequesting()
+                        viewModel.toggleSending()
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(

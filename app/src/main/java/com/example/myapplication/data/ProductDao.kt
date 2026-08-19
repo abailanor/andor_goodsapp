@@ -31,6 +31,10 @@ interface ProductDao {
     @Query("SELECT * FROM products")
     suspend fun getAllProductsList(): List<Product>
 
+    @Query("SELECT * FROM products WHERE SUBSTR(barcode, 1, 1) != '0'")
+    suspend fun getProductsWithFirstBarcodeNotZero(): List<Product>
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertProducts(products: List<Product>)
 
 }

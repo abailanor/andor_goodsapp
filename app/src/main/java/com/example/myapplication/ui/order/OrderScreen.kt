@@ -18,12 +18,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Save
@@ -60,7 +59,6 @@ fun OrderScreen(
     val message by viewModel.message.collectAsState()
     val sourcePendingFileName by viewModel.sourcePendingFileName.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
-    val isSearching by viewModel.isSearching.collectAsState()
     val soundEnabled by viewModel.soundEnabled.collectAsState()
 
     // AI 预选输入
@@ -79,12 +77,18 @@ fun OrderScreen(
     var barcodeInput by remember { mutableStateOf("") }
 
 
+    val listState = rememberLazyListState()
 
 
     LaunchedEffect(message) {
         message?.let {
             kotlinx.coroutines.delay(3000)
             viewModel.clearMessage()
+        }
+    }
+    LaunchedEffect(searchResults) {
+        if (searchResults.isNotEmpty()) {
+            listState.scrollToItem(0)
         }
     }
 
@@ -285,23 +289,7 @@ fun OrderScreen(
                             .fillMaxWidth()
                             .padding(8.dp)
                     ) {
-                        if (isSearching) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "搜索中...",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        } else {
+
                             Text(
                                 text = "搜索结果（点击添加）：",
                                 style = MaterialTheme.typography.bodySmall,
@@ -312,7 +300,8 @@ fun OrderScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(max = 200.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        state = listState
                             ) {
                                 items(
                                     items = searchResults,
@@ -327,7 +316,7 @@ fun OrderScreen(
                                     )
                                 }
                             }
-                        }
+
                     }
                 }
             }
