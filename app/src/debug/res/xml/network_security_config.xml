@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  debug 构建专用覆盖版：额外允许对**两个具体地址**明文，方便模拟器联调本机服务。
+
+  - 10.0.2.2  = 模拟器访问宿主机 localhost 的地址
+  - localhost = 真机 adb reverse 时用
+
+  ⚠ 只限这两个地址，**不要**改成 cleartextTrafficPermitted="true" 全局放开。
+  ⚠ 这个文件在 src/debug/ 下，release 构建拿不到它（资源合并时 src/main/ 的那份生效）。
+     发布前用 aapt2 dump xmltree app-release.apk 确认打进去的是严格版本。
+     （顺带一个坑：XML 注释里不允许出现连续两个减号，所以这里不能把命令写全。）
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="@raw/s1_ca" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+
+</network-security-config>

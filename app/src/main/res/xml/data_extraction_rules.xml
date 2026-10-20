@@ -1,19 +1,56 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+（API 31）的数据提取规则，管**云备份**与**设备到设备迁移**两条路。
+  API 23~30 看 backup_rules.xml，两个文件都要改，别只改一个。
+
+  ## 为什么 allowBackup="false" 了还要写这些排除项
+
+  `android:allowBackup="false"` 确实能一次关掉全部备份。但它是**一个开关**，
+  将来某天为了迁移商品数据把它打开（这个需求很可能出现：用户换手机时不想重录 400 条商品），
+  凭据和镜像就会跟着一起被备份走 —— 而那时候没人会想起回来改这个文件。
+  显式排除是"开关被打开也仍然安全"，属于纵深防御。
+
+  ## 排除清单与理由
+
+  （⚠ XML 注释里不允许出现连续两个减号，所以这里不写 markdown 表格。）
+
+  `datastore/`：里面有 AES-GCM 加密的**登录密码与 JWT**。密文泄露本身不算失守
+  （密钥在 AndroidKeyStore 里出不来，换设备也解不开），但没有任何理由让它进云端。
+
+  `mirror/` 及三个兄弟目录：**恢复一份过期镜像是危险的，而且是静默的**。
+  镜像与服务端的一致性只能自比（服务端的 `orderfile:checksum:<fileId>` 没有接口可读，
+  README §9），所以"恢复出来的镜像比服务器旧"这件事**检测不出来**，
+  之后每次取消订单都会打到错误的字节偏移上。排除掉，让新设备老老实实走一次 FULL。
+
+  `logs/`：变更日志里含订单号、商品名、401/409 的详情。纯诊断用途，不该离开本机。
+
+  ⚠ `databases/`（Room）**没有**排除：商品表、倒排索引、统计贡献行是用户手录的资产，
+  换机时正是最需要带走的部分。它们按 `storeKey` 分维度、与镜像字节无关，
+  恢复后由同步引擎按 `file_state` 的游标补齐（游标对不上会走 FULL，不会静默错）。
 -->
 <data-extraction-rules>
+
     <cloud-backup>
-        <!--
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="datastore/" />
+        <exclude domain="file" path="mirror/" />
+        <exclude domain="file" path="mirror-tmp/" />
+        <exclude domain="file" path="mirror-quarantine/" />
+        <exclude domain="file" path="mirror-archive/" />
+        <exclude domain="file" path="logs/" />
     </cloud-backup>
+
     <!--
-    <device-transfer>
-        <include .../>
-        <exclude .../>
-    </device-transfer>
+      设备到设备迁移。这里比云备份**更**要排除镜像：
+      D2D 是"旧机 → 新机"直接拷贝，用户会以为数据完整迁移了，
+      而镜像一旦与服务端不同步就没有任何提示。宁可让新机重下一次 FULL。
     -->
+    <device-transfer>
+        <exclude domain="file" path="datastore/" />
+        <exclude domain="file" path="mirror/" />
+        <exclude domain="file" path="mirror-tmp/" />
+        <exclude domain="file" path="mirror-quarantine/" />
+        <exclude domain="file" path="mirror-archive/" />
+        <exclude domain="file" path="logs/" />
+    </device-transfer>
+
 </data-extraction-rules>

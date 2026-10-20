@@ -13,3 +13,15 @@
 .externalNativeBuild
 .cxx
 local.properties
+.kotlin/
+
+# ---- PKI：私钥绝不进版本库 ----
+# tools/pki/ 下有 ca.key（CA 私钥）与 server.key/server.p12（服务端私钥）。
+# 泄露 ca.key 等于任何人都能给任意 IP 签一张你的 App 会信任的证书 —— 那就是完整的中间人。
+# 整个目录忽略，需要时由 tools/gen-cert.sh 现场生成。
+tools/pki/
+
+# 例外：App 内置的信任锚**要**进版本库（它是公开的 CA 证书，不含私钥）。
+# 它在 app/src/main/res/raw/ 下，不在 tools/pki/ 里，所以本来就不受上面那条影响；
+# 这里显式写一行是为了让 review 的人一眼看到"这个文件是故意提交的"。
+!app/src/main/res/raw/s1_ca.pem

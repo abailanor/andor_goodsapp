@@ -35,7 +35,7 @@ class DatabaseImporter(private val context: Context) {
 
             try {
                 // 读取外部数据库中的产品数据
-                val products = mutableListOf<Product>()
+                val legacy = mutableListOf<BoxRowMerger.LegacyRow>()
                 val cursor = externalDb.rawQuery(
                     "SELECT barcode, name, price FROM products",
                     null
@@ -45,30 +45,36 @@ class DatabaseImporter(private val context: Context) {
                     while (it.moveToNext()) {
                         val barcode = it.getString(0) ?: ""
                         val name = it.getString(1) ?: ""
-
-                        val priceString = it.getString(2)?:""
-                        val price = BigDecimal(priceString)
-
-                        if (barcode.isNotBlank() && name.isNotBlank()) {
-                            products.add(Product(barcode, name, price))
+                        // price 一律按**字符串**读再转 BigDecimal：
+                        // 走 Double 会有精度问题，而服务端的金额字段是保留尾零的字符串。
+                        val priceString = it.getString(2) ?: ""
+                        val price = try {
+                            BigDecimal(priceString.trim())
+                        } catch (e: NumberFormatException) {
+                            null
+                        }
+                        if (barcode.isNotBlank() && name.isNotBlank() && price != null) {
+                            legacy.add(BoxRowMerger.LegacyRow(barcode, name, price))
                         }
                     }
                 }
 
-                if (products.isEmpty()) {
+                if (legacy.isEmpty()) {
                     return@withContext ImportResult.Error("外部数据库中没有找到产品数据")
                 }
 
-                // 清空当前数据库并导入新数据
+                // 旧格式用"条码前加 0 再插一行"表示整件，必须合并成一条
+                // （与 MIGRATION_3_4 走同一套 BoxRowMerger，规则不会漂移）
+                val merged = BoxRowMerger.merge(legacy)
+                val products = merged.merged.map { it.product } +
+                    merged.orphanBoxRows.map { Product(it.barcode, it.name, it.price) }
+
+                if (products.isEmpty()) {
+                    return@withContext ImportResult.Error("外部数据库中没有找到可用的产品数据")
+                }
+
                 val database = AppDatabase.getDatabase(context)
-                val productDao = database.productDao()
-
-
-                // 批量插入新数据
-//                products.forEach { product ->
-//                    productDao.insertProduct(product)
-//                }
-                productDao.insertProducts(products)
+                ProductRepository(database.productDao()).insertProducts(products)
 
                 ImportResult.Success(products.size)
 

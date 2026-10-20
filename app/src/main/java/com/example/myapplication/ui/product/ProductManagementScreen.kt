@@ -62,11 +62,6 @@ fun ProductManagementScreen(
                 onClick = { selectedTab = ProductManagementTab.MODIFY_PRODUCT },
                 text = { Text("商品修改") }
             )
-//            Tab(
-//                selected = selectedTab == ProductManagementTab.PRODUCT_LIST,
-//                onClick = { selectedTab = ProductManagementTab.PRODUCT_LIST },
-//                text = { Text("商品列表") }
-//            )
             Tab(
                 selected = selectedTab == ProductManagementTab.IMPORT_DB,
                 onClick = { selectedTab = ProductManagementTab.IMPORT_DB },
@@ -691,19 +686,6 @@ fun ImportDatabaseScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-
-                // 目标IP输入
-//                OutlinedTextField(
-//                    value = ipInput,
-//                    onValueChange = {
-//                        ipInput = it
-//                        viewModel.setTargetIpAddress(it)
-//                    },
-//                    label = { Text("对方IP地址") },
-//                    modifier = Modifier.fillMaxWidth(),
-//                    singleLine = true,
-//                    enabled = !isRequesting
-//                )
 
                 // 请求按钮
                 Button(

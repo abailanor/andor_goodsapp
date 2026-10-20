@@ -23,9 +23,6 @@ class OrderStorage(private val context: Context) {
         context.getSharedPreferences("order_storage", Context.MODE_PRIVATE)
     private val gson = Gson()
 
-//    suspend fun saveOrderItems(orderItems: List<OrderItem>) {
-//        saveOrderData(orderItems, null, null)
-//    }
     suspend fun saveOrderData(
         orderItems: List<OrderItem>,
         sourcePendingFileName: String? = null,

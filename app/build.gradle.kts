@@ -38,6 +38,20 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // MigrationTestHelper 要从 assets 里读 `app/schemas/` 下的历史 schema JSON，
+    // 所以把那个目录挂成 androidTest 的 assets 源。少了这一步
+    // `createDatabase(name, 3)` 会抛 IOException 找不到 schema。
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
+}
+
+// Room 把每个版本的 schema 导出成 JSON 到 app/schemas/，**这个目录要进 git**。
+// 有了它 MigrationTestHelper 才能造出"真实的 v3 库"来验证 3→4 的迁移，
+// 否则迁移测试只能对着自己写的假 DDL 自说自话。
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -72,8 +86,21 @@ dependencies {
     
     // Gson
     implementation(libs.gson)
-    
+
+    // 协程（StripedMutex / 同步引擎）
+    implementation(libs.kotlinx.coroutines.android)
+
+    // 网络：普通 API 与 SSE 用**不同**的 OkHttpClient（SSE 必须 readTimeout=0）
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.sse)
+    implementation(libs.androidx.datastore.preferences)
+
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.okhttp.tls)
+    // MigrationTestHelper 是 instrumented 的，迁移测试跑在 androidTest
+    androidTestImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

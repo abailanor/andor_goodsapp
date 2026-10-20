@@ -1,0 +1,1514 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 4,
+    "identityHash": "d3d07717d7256a5c2f13ed1466765e5d",
+    "entities": [
+      {
+        "tableName": "store_meta",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `ownerName` TEXT NOT NULL, `username` TEXT NOT NULL, `level` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `enumFloorYear` INTEGER NOT NULL, `enumFloorMonth` INTEGER NOT NULL, `priceVersion` INTEGER NOT NULL, `stockVersion` INTEGER NOT NULL, `lastLoginAt` INTEGER NOT NULL, `previousLoginAt` INTEGER NOT NULL, `adoptedAt` INTEGER NOT NULL, `permsCsv` TEXT NOT NULL, `adminCode` TEXT NOT NULL, PRIMARY KEY(`storeKey`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerName",
+            "columnName": "ownerName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "username",
+            "columnName": "username",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "level",
+            "columnName": "level",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "enumFloorYear",
+            "columnName": "enumFloorYear",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "enumFloorMonth",
+            "columnName": "enumFloorMonth",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "priceVersion",
+            "columnName": "priceVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stockVersion",
+            "columnName": "stockVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastLoginAt",
+            "columnName": "lastLoginAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "previousLoginAt",
+            "columnName": "previousLoginAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "adoptedAt",
+            "columnName": "adoptedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "permsCsv",
+            "columnName": "permsCsv",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "adminCode",
+            "columnName": "adminCode",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "product_synced",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `name` TEXT NOT NULL, `price` TEXT NOT NULL, `boxPrice` TEXT, `boxSize` INTEGER NOT NULL, `stock` INTEGER NOT NULL, `orderable` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "boxPrice",
+            "columnName": "boxPrice",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "boxSize",
+            "columnName": "boxSize",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stock",
+            "columnName": "stock",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderable",
+            "columnName": "orderable",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "barcode"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_product_synced_storeKey_name",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_product_synced_storeKey_name` ON `${TABLE_NAME}` (`storeKey`, `name`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "product_local",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `name` TEXT NOT NULL, `price` TEXT NOT NULL, `boxPrice` TEXT, `boxSize` INTEGER NOT NULL, `stock` INTEGER NOT NULL, `orderable` INTEGER NOT NULL, `pushState` TEXT NOT NULL, `createdAtLocal` INTEGER NOT NULL, `updatedAtLocal` INTEGER NOT NULL, `lastPushError` TEXT, PRIMARY KEY(`storeKey`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "boxPrice",
+            "columnName": "boxPrice",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "boxSize",
+            "columnName": "boxSize",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stock",
+            "columnName": "stock",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderable",
+            "columnName": "orderable",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pushState",
+            "columnName": "pushState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtLocal",
+            "columnName": "createdAtLocal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtLocal",
+            "columnName": "updatedAtLocal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPushError",
+            "columnName": "lastPushError",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "barcode"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_product_local_storeKey_name",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_product_local_storeKey_name` ON `${TABLE_NAME}` (`storeKey`, `name`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "product_pending_change",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `op` TEXT NOT NULL, `name` TEXT NOT NULL, `price` TEXT NOT NULL, `boxPrice` TEXT, `boxSize` INTEGER NOT NULL, `stock` INTEGER NOT NULL, `orderable` INTEGER NOT NULL, `queuedAt` INTEGER NOT NULL, `attemptCount` INTEGER NOT NULL, `lastError` TEXT, PRIMARY KEY(`storeKey`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "op",
+            "columnName": "op",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "boxPrice",
+            "columnName": "boxPrice",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "boxSize",
+            "columnName": "boxSize",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stock",
+            "columnName": "stock",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderable",
+            "columnName": "orderable",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queuedAt",
+            "columnName": "queuedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attemptCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "barcode"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "product_extra",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `category` TEXT NOT NULL, `note` TEXT NOT NULL, PRIMARY KEY(`storeKey`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "barcode"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "product_tombstone",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `name` TEXT NOT NULL, `deletedAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deletedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "barcode"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "product_token",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `token` TEXT NOT NULL, `barcode` TEXT NOT NULL, `pos` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `token`, `barcode`, `pos`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "token",
+            "columnName": "token",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pos",
+            "columnName": "pos",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "token",
+            "barcode",
+            "pos"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_product_token_storeKey_token",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "token"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_product_token_storeKey_token` ON `${TABLE_NAME}` (`storeKey`, `token`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "file_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `fileId` TEXT NOT NULL, `fileType` TEXT NOT NULL, `year` INTEGER NOT NULL, `month` INTEGER NOT NULL, `version` INTEGER NOT NULL, `lastStreamId` TEXT, `checksum` INTEGER NOT NULL, `mirrorBytes` INTEGER NOT NULL, `firstSyncedAt` INTEGER, `syncState` TEXT NOT NULL, `lastSyncAttemptAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `fileId`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileId",
+            "columnName": "fileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileType",
+            "columnName": "fileType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "month",
+            "columnName": "month",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "version",
+            "columnName": "version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastStreamId",
+            "columnName": "lastStreamId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "checksum",
+            "columnName": "checksum",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mirrorBytes",
+            "columnName": "mirrorBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "firstSyncedAt",
+            "columnName": "firstSyncedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "syncState",
+            "columnName": "syncState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncAttemptAt",
+            "columnName": "lastSyncAttemptAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "fileId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "order_index",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `fileId` TEXT NOT NULL, `orderUuid` TEXT NOT NULL, `writer` TEXT NOT NULL, `status` INTEGER NOT NULL, `orderTs` INTEGER NOT NULL, `totalCents` INTEGER NOT NULL, `manualTotal` INTEGER NOT NULL, `itemCount` INTEGER NOT NULL, `lineStart` INTEGER NOT NULL, `uuidOffset` INTEGER NOT NULL, `statusOffset` INTEGER NOT NULL, `remarkOffset` INTEGER, `remark` TEXT, `appliedFileVersion` INTEGER NOT NULL, `cancelAppliedVersion` INTEGER, `groupId` TEXT, PRIMARY KEY(`storeKey`, `fileId`, `orderUuid`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileId",
+            "columnName": "fileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderUuid",
+            "columnName": "orderUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "writer",
+            "columnName": "writer",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderTs",
+            "columnName": "orderTs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalCents",
+            "columnName": "totalCents",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "manualTotal",
+            "columnName": "manualTotal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemCount",
+            "columnName": "itemCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineStart",
+            "columnName": "lineStart",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uuidOffset",
+            "columnName": "uuidOffset",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "statusOffset",
+            "columnName": "statusOffset",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remarkOffset",
+            "columnName": "remarkOffset",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "remark",
+            "columnName": "remark",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "appliedFileVersion",
+            "columnName": "appliedFileVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cancelAppliedVersion",
+            "columnName": "cancelAppliedVersion",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "groupId",
+            "columnName": "groupId",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "fileId",
+            "orderUuid"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_order_index_storeKey_writer_orderTs",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "writer",
+              "orderTs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_order_index_storeKey_writer_orderTs` ON `${TABLE_NAME}` (`storeKey`, `writer`, `orderTs`)"
+          },
+          {
+            "name": "index_order_index_storeKey_fileId_orderTs",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "fileId",
+              "orderTs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_order_index_storeKey_fileId_orderTs` ON `${TABLE_NAME}` (`storeKey`, `fileId`, `orderTs`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "order_item_index",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `fileId` TEXT NOT NULL, `orderUuid` TEXT NOT NULL, `lineNo` INTEGER NOT NULL, `barcode` TEXT NOT NULL, `name` TEXT NOT NULL, `quantity` INTEGER NOT NULL, `amountCents` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `fileId`, `orderUuid`, `lineNo`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileId",
+            "columnName": "fileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderUuid",
+            "columnName": "orderUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lineNo",
+            "columnName": "lineNo",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quantity",
+            "columnName": "quantity",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amountCents",
+            "columnName": "amountCents",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "fileId",
+            "orderUuid",
+            "lineNo"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_order_item_index_storeKey_barcode",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "barcode"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_order_item_index_storeKey_barcode` ON `${TABLE_NAME}` (`storeKey`, `barcode`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "order_group",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `groupId` TEXT NOT NULL, `writer` TEXT NOT NULL, `orderCount` INTEGER NOT NULL, `totalCents` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `cancelState` TEXT NOT NULL, PRIMARY KEY(`storeKey`, `groupId`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupId",
+            "columnName": "groupId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "writer",
+            "columnName": "writer",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderCount",
+            "columnName": "orderCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalCents",
+            "columnName": "totalCents",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cancelState",
+            "columnName": "cancelState",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "groupId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_order_group_storeKey_createdAt",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "createdAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_order_group_storeKey_createdAt` ON `${TABLE_NAME}` (`storeKey`, `createdAt`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "order_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `orderUuid` TEXT NOT NULL, `groupId` TEXT NOT NULL, `fileType` TEXT NOT NULL, `year` INTEGER NOT NULL, `month` INTEGER NOT NULL, `payload` BLOB NOT NULL, `state` TEXT NOT NULL, `blockedReason` TEXT, `blockedBarcodes` TEXT, `attemptCount` INTEGER NOT NULL, `lastError` TEXT, `pricedAt` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `writer` TEXT NOT NULL, `totalCents` INTEGER NOT NULL, `itemCount` INTEGER NOT NULL, `orderTs` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `orderUuid`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderUuid",
+            "columnName": "orderUuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupId",
+            "columnName": "groupId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileType",
+            "columnName": "fileType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "month",
+            "columnName": "month",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blockedReason",
+            "columnName": "blockedReason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "blockedBarcodes",
+            "columnName": "blockedBarcodes",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attemptCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pricedAt",
+            "columnName": "pricedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "writer",
+            "columnName": "writer",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalCents",
+            "columnName": "totalCents",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemCount",
+            "columnName": "itemCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderTs",
+            "columnName": "orderTs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "orderUuid"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_order_outbox_storeKey_state_createdAt",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "state",
+              "createdAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_order_outbox_storeKey_state_createdAt` ON `${TABLE_NAME}` (`storeKey`, `state`, `createdAt`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "stats_contrib",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `scope` TEXT NOT NULL, `dimKey` TEXT NOT NULL, `metric` TEXT NOT NULL, `value` INTEGER NOT NULL, `frozen` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `scope`, `dimKey`, `metric`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scope",
+            "columnName": "scope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dimKey",
+            "columnName": "dimKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metric",
+            "columnName": "metric",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "frozen",
+            "columnName": "frozen",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "scope",
+            "dimKey",
+            "metric"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "stats_agg",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `dimKey` TEXT NOT NULL, `metric` TEXT NOT NULL, `value` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `dimKey`, `metric`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dimKey",
+            "columnName": "dimKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metric",
+            "columnName": "metric",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "dimKey",
+            "metric"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "stock_absorb_boundary",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `fileId` TEXT NOT NULL, `barcode` TEXT NOT NULL, `boundaryVersion` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `fileId`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileId",
+            "columnName": "fileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "boundaryVersion",
+            "columnName": "boundaryVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "fileId",
+            "barcode"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "stock_apply_log",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `dedupKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `newStock` INTEGER NOT NULL, `source` TEXT NOT NULL, `appliedAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `dedupKey`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dedupKey",
+            "columnName": "dedupKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "newStock",
+            "columnName": "newStock",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "appliedAt",
+            "columnName": "appliedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "dedupKey"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "restock_item",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, `source` TEXT NOT NULL, `checked` INTEGER NOT NULL, `note` TEXT, PRIMARY KEY(`storeKey`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "addedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checked",
+            "columnName": "checked",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "barcode"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "restock_rule",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `ruleId` TEXT NOT NULL, `barcodesCsv` TEXT NOT NULL, `threshold` INTEGER NOT NULL, `enabled` INTEGER NOT NULL, `lastRunAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `ruleId`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ruleId",
+            "columnName": "ruleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcodesCsv",
+            "columnName": "barcodesCsv",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "threshold",
+            "columnName": "threshold",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastRunAt",
+            "columnName": "lastRunAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "ruleId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "restock_filter",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `filterId` TEXT NOT NULL, `name` TEXT NOT NULL, `treeJson` TEXT NOT NULL, `isLastUsed` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `filterId`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "filterId",
+            "columnName": "filterId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "treeJson",
+            "columnName": "treeJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isLastUsed",
+            "columnName": "isLastUsed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "filterId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_restock_filter_storeKey_isLastUsed",
+            "unique": false,
+            "columnNames": [
+              "storeKey",
+              "isLastUsed"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_restock_filter_storeKey_isLastUsed` ON `${TABLE_NAME}` (`storeKey`, `isLastUsed`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "sort_pref",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `screen` TEXT NOT NULL, `field` TEXT NOT NULL, `ascending` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `screen`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "screen",
+            "columnName": "screen",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "field",
+            "columnName": "field",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ascending",
+            "columnName": "ascending",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "screen"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "admin_catalog",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `barcode` TEXT NOT NULL, `name` TEXT NOT NULL, `price` TEXT NOT NULL, `boxPrice` TEXT, `boxSize` INTEGER NOT NULL, `stock` INTEGER NOT NULL, `orderable` INTEGER NOT NULL, PRIMARY KEY(`storeKey`, `barcode`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "boxPrice",
+            "columnName": "boxPrice",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "boxSize",
+            "columnName": "boxSize",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stock",
+            "columnName": "stock",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderable",
+            "columnName": "orderable",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey",
+            "barcode"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "admin_catalog_cursor",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`storeKey` TEXT NOT NULL, `adminCode` TEXT NOT NULL, `lastId` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`storeKey`))",
+        "fields": [
+          {
+            "fieldPath": "storeKey",
+            "columnName": "storeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "adminCode",
+            "columnName": "adminCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastId",
+            "columnName": "lastId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "storeKey"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd3d07717d7256a5c2f13ed1466765e5d')"
+    ]
+  }
+}

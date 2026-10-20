@@ -16,15 +16,33 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!--
+      allowBackup="false"：App 要存**登录密码**（Keystore 加密后落在 DataStore）以实现自动登录。
+      开着备份的话凭据会进 Google 云备份 —— Keystore 加密的密文虽然解不开，
+      但 `adb backup` / 云备份里的加密密钥在换机恢复时可能被一并还原，
+      等于把"其他程序一般读取不到"这个前提削弱了。
+      订单镜像与商品数据同样不该被备份到 App 沙箱之外（里面是经营数据）。
+
+      networkSecurityConfig：base-config 只信任内置的自签 CA（见 res/xml/）。
+      debug 构建有覆盖版本，额外允许对 10.0.2.2 / localhost 明文。
+      ⚠ 不要用 android:usesCleartextTraffic="true" —— 那会对**所有域名**放开明文。
+
+      android:name=".app.App"：进程入口，负责建 ServiceLocator 并启动设置监听。
+      ⚠ 这里的相对类名是按 **namespace**（com.example.myapplication）解析的，不是 applicationId，
+      所以 hq flavor 的 applicationIdSuffix=".hq" **不会**让它找不到类 —— 不用写成全限定名。
+    -->
     <application
-        android:allowBackup="true"
+        android:name=".app.App"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MyApplication">
+        android:theme="@style/Theme.MyApplication"
+        tools:targetApi="31">
         <activity
             android:name=".MainActivity"
             android:exported="true"

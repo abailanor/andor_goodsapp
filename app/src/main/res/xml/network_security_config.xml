@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置（release 与 debug 共用的基线；debug 版在 src/debug/res/xml/ 下覆盖）。
+
+  ## base-config 只信任内置的自签 CA
+
+  App 里没有 WebView（AIScreen 的 createWebView 是死代码，P9 会删掉），也没有任何
+  其它对外的 HTTPS 调用，所以可以把信任面收窄到只有我们自己那张 CA ——
+  这等于全 App 的 TLS 都被钉死（证书绑定）。
+
+  公共 CA 体系里任何一家被攻破，都能给任意 IP 签一张"浏览器会信任"的证书；
+  自签 CA 的私钥只在 tools/pki/ca.key（已 gitignore，绝不进版本库）。
+
+  ⚠ 真正生效的信任锚是 HttpClients.trustAnchorFromPem 挂在 OkHttpClient 上的那个
+  TrustManager，**不是**这里。这里管的是 WebView / 系统组件 / 第三方库。
+  两处都要收窄，否则从 NSC 这条路走出去的请求仍然信任全部公共 CA。
+
+  ## cleartextTrafficPermitted="false"
+
+  全局禁明文。不要用 android:usesCleartextTraffic="true"（ANDROID.md §1.1 明确反对：
+  那会让所有域名都能明文）。开发期需要明文连模拟器宿主机时，走 src/debug/ 的覆盖版本，
+  并且只限定到具体域名。
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="@raw/s1_ca" />
+        </trust-anchors>
+    </base-config>
+
+</network-security-config>

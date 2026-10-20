@@ -112,12 +112,6 @@ class PendingOrdersViewModel(
                         orderItems.add(OrderItem(product = product, quantity = line.quantity))
                     }
                 }
-//
-//                // 如果有待开单数据（开单页面有未保存的订单），先保存再清除
-//                if (PendingOrderLoader.orderItems != null && PendingOrderLoader.targetOrder != null) {
-//                    // 开单页面的保存逻辑会由开单页面自己处理
-//                    // 这里只需要设置新数据，开单页面会自动处理
-//                }
 
                 // 设置新订单数据
                 PendingOrderLoader.orderItems = orderItems

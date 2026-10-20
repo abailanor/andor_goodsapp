@@ -261,18 +261,6 @@ fun OrderScreen(
                             )
                         }
                     }
-//                    Button(
-//                        onClick = {
-//                            if (barcodeInput.isNotBlank()) {
-//                                viewModel.scanBarcode(barcodeInput.trim())
-//                                barcodeInput = ""
-//                                viewModel.clearSearchResults()
-//                            }
-//                        },
-//                        modifier = Modifier.height(48.dp)
-//                    ) {
-//                        Text("添加", style = MaterialTheme.typography.bodyMedium)
-//                    }
                 }
             }
 

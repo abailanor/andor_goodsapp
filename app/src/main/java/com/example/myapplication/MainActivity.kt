@@ -14,7 +14,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.myapplication.data.AppDatabase
+import com.example.myapplication.app.App
 import com.example.myapplication.data.PendingOrderLoader
 import com.example.myapplication.data.ProductRepository
 import com.example.myapplication.ui.history.OrderHistoryScreen
@@ -45,8 +45,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val database = AppDatabase.getDatabase(this)
-        val repository = ProductRepository(database.productDao())
+        // 走 ServiceLocator 而不是自己 `AppDatabase.getDatabase(this)` + `ProductRepository(...)`：
+        // 数据库与仓库必须是**全进程一份**，两条各自 new 的路径迟早会分叉
+        // （尤其是倒排索引与商品写入要在同一个事务里维护）。
+        val repository = App.locatorOf(this).products
 
         setContent {
             MyApplicationTheme {
