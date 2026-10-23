@@ -256,6 +256,88 @@ class CartPricingTest {
         assertEquals(12_000L - 10_400L, after.discount)
     }
 
+    // ==================== 从总个数反推箱/个 ====================
+
+    @Test
+    fun `总数超过箱规时拆成一箱加零散`() {
+        // 店员数了 30 个就输 30，系统自己知道 24 个一箱
+        val l = CartPricing.fromTotalQuantity(product(), 30)!!
+
+        assertEquals(1, l.boxes)
+        assertEquals(6, l.singles)
+        assertEquals(30, l.quantity)
+        // 1 箱 80.00 + 6 个 21.00 = 101.00，而 30 × 3.50 = 105.00
+        assertEquals(10_100L, l.amountCents)
+        assertEquals(10_500L, l.listPriceCents)
+    }
+
+    @Test
+    fun `总数不足一箱时全按散卖`() {
+        val l = CartPricing.fromTotalQuantity(product(), 6)!!
+
+        assertEquals(0, l.boxes)
+        assertEquals(6, l.singles)
+        assertEquals(2_100L, l.amountCents)
+        // 没有整箱参与就没有折扣
+        assertEquals(0L, CartPricing.totals(listOf(l)).discount)
+    }
+
+    @Test
+    fun `正好整数箱时零散为_0`() {
+        val l = CartPricing.fromTotalQuantity(product(), 48)!!
+
+        assertEquals(2, l.boxes)
+        assertEquals(0, l.singles)
+        assertEquals(48, l.quantity)
+        assertEquals(16_000L, l.amountCents)
+        assertEquals(800L, CartPricing.totals(listOf(l)).discount)
+    }
+
+    @Test
+    fun `不按整箱卖的商品不拆`() {
+        val p = product(boxPrice = null, boxSize = 0)
+        val l = CartPricing.fromTotalQuantity(p, 30)!!
+
+        assertEquals(0, l.boxes)
+        assertEquals(30, l.singles)
+        assertEquals(10_500L, l.amountCents)
+    }
+
+    @Test
+    fun `有整箱价但没箱规时不拆_也不能除零`() {
+        // boxSize = 0：拆箱会除零。这种商品要被 ambiguousBoxProducts 报出来，
+        // 而不是静默按散卖计价。
+        val p = product(boxPrice = "80.00", boxSize = 0)
+        val l = CartPricing.fromTotalQuantity(p, 30)!!
+
+        assertEquals(0, l.boxes)
+        assertEquals(30, l.singles)
+        assertTrue(p.needsBoxSize)
+        assertEquals(10_500L, l.amountCents)   // 整箱价被忽略了 → 多收钱
+    }
+
+    @Test
+    fun `ambiguousBoxProducts_报出设了整箱价却没箱规的商品`() {
+        val bad = product(barcode = "6900000000001", boxPrice = "80.00", boxSize = 0)
+        val ok = product(barcode = "6900000000002")
+        val noBox = product(barcode = "6900000000003", boxPrice = null, boxSize = 0)
+
+        val out = CartPricing.ambiguousBoxProducts(
+            listOf(bad to 30, ok to 30, noBox to 5, bad to 10)
+        )
+
+        // 去重，且不把"本来就不按整箱卖"的算进来
+        assertEquals(listOf("6900000000001"), out)
+    }
+
+    @Test
+    fun `数量为_0_或负数的行被丢掉_而不是让整次结算失败`() {
+        val out = CartPricing.fromCart(listOf(product() to 5, product(barcode = "x") to 0, product(barcode = "y") to -3))
+
+        assertEquals(1, out.size)
+        assertEquals(5, out.single().singles)
+    }
+
     // ==================== 输入校验 ====================
 
     @Test

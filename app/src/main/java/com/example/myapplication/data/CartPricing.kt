@@ -162,6 +162,61 @@ object CartPricing {
     }
 
     /**
+     * 从"总个数"反推箱/个拆分。
+     *
+     * ## 为什么需要它
+     *
+     * 现有的开单页只有一个数量输入（旧 `OrderItem(product, quantity)`），
+     * 而整箱优惠需要知道"几箱 + 几个"。与其把整个购物车 UI 重写一遍，
+     * 不如在结算那一刻按箱规把总数拆开：`boxes = quantity / boxSize`、
+     * `singles = quantity % boxSize`。
+     *
+     * 这也正好对上店员的直觉：他数了 30 个就输 30，系统自己知道 24 个一箱。
+     *
+     * ## ⚠ 这是**对顾客有利**的那一侧
+     *
+     * 30 个会被算成 1 箱(80.00) + 6 个(21.00) = 101.00，而不是 30 × 3.50 = 105.00。
+     * 如果店里其实没有整箱可拆、只能散卖 30 个，那就少收了 4 块 ——
+     * 但反过来（多收顾客钱）是要当场吵架的，而少收是月底盘点能发现的。
+     * 两害相权取其轻。要精确控制的话，购物车得能分别输箱数和个数（P7 后续）。
+     *
+     * @return 拆好的一行。`quantity <= 0` 时返回 null（空行不该进购物车）。
+     */
+    fun fromTotalQuantity(product: Product, quantity: Int): CartLine? {
+        if (quantity <= 0) return null
+        // 只有"真按整箱卖"（有整箱价**且**有箱规）才拆。
+        // boxSize == 0 时不能拆（除零），而且那种商品本来就缺箱规、要走 BLOCKED 流程。
+        return if (product.sellsByBox && quantity >= product.boxSize) {
+            CartLine(product, boxes = quantity / product.boxSize, singles = quantity % product.boxSize)
+        } else {
+            CartLine(product, boxes = 0, singles = quantity)
+        }
+    }
+
+    /**
+     * 整车转换。任何一行 `quantity <= 0` 都会被丢掉（而不是抛）：
+     * 购物车里出现 0 个的行是 UI 状态没清干净，不该让它把整次结算搞失败。
+     */
+    fun fromCart(items: List<Pair<Product, Int>>): List<CartLine> =
+        items.mapNotNull { (p, q) -> fromTotalQuantity(p, q) }
+
+    /**
+     * 设了整箱价、但**没有箱规**的商品条码（`Product.needsBoxSize`）。
+     *
+     * ## ⚠ 这类商品在 [fromTotalQuantity] 路径下会被按散卖计价
+     *
+     * 拆箱需要箱规，没有箱规就拆不了，于是整箱价被**忽略**、全按单价算 ——
+     * 也就是多收了顾客的钱。这不是 bug 而是数据不全（商家填了整箱价却没填一箱几个），
+     * 但**绝不能让它静默发生**：结算时必须把这些商品列出来告诉用户。
+     *
+     * 与 [missingBoxSize] 的区别：那个是"用户明确输了箱数但算不出个数"→ 整单挂起；
+     * 这个是"只有一个总数、系统无从拆箱"→ 可以结算，但要提示。
+     * 后者只有在购物车分别输箱数和个数时才可能变成前者。
+     */
+    fun ambiguousBoxProducts(items: List<Pair<Product, Int>>): List<String> =
+        items.filter { (p, q) -> q > 0 && p.needsBoxSize }.map { it.first.barcode }.distinct()
+
+    /**
      * 缺箱规的条码：`boxes > 0 且 boxSize == 0`。
      *
      * 非空 → 整单挂进 outbox 标 `BLOCKED_MISSING_BOX_SIZE`（[OutboxStore.enqueue] 的
