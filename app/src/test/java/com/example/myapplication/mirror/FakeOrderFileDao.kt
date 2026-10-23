@@ -510,6 +510,12 @@ internal class FakeOrderFileDao : OrderFileDao {
         emit(outboxPending(storeKey))
     }
 
+    override suspend fun orderItemsOfUuid(storeKey: String, orderUuid: String): List<OrderItemIndexEntity> =
+        items
+            .filter { it.storeKey == storeKey && it.orderUuid == orderUuid }
+            // SQL 是 ORDER BY fileId, lineNo
+            .sortedWith(compareBy({ it.fileId }, { it.lineNo }))
+
     override fun observeContribInRange(
         storeKey: String,
         fromDate: String,

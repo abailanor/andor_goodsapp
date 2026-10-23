@@ -3,6 +3,7 @@ package com.example.myapplication.ui.order
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.myapplication.core.money.Money
 import com.example.myapplication.data.CartLine
 import com.example.myapplication.data.CartPricing
 import com.example.myapplication.data.OrderItem
@@ -71,6 +72,34 @@ class OrderViewModel(
 
     val totalPrice: BigDecimal
         get() = _orderItems.value.fold(BigDecimal.ZERO) { acc, item -> acc.add(item.subtotal) }
+
+    // ==================== 手工总额（抹零）====================
+
+    /**
+     * 手工改过的总额文本。**null = 没改过**，此时界面上那个框显示实时计算值。
+     *
+     * 用 null 而不是空串区分"没改过"：空串是"改成了一个解析不出来的东西"，
+     * 而 null 是"跟随计算值"。两者的界面表现一样（都显示计算值），
+     * 但语义不同 —— 前者要报错，后者是正常的。
+     */
+    private val _manualTotalText = MutableStateFlow<String?>(null)
+    val manualTotalText: StateFlow<String?> = _manualTotalText.asStateFlow()
+
+    /** 当前生效的手工总额（分）。没改过、或改了个解析不出来的值，都是 null。 */
+    val manualTotalCents: Long?
+        get() = _manualTotalText.value?.let { runCatching { Money.toCents(it) }.getOrNull() }
+
+    /** 填了东西但解析不出来。界面要标红，不能静默当成"没改过"。 */
+    val manualTotalInvalid: Boolean
+        get() = _manualTotalText.value != null && manualTotalCents == null
+
+    fun setManualTotal(text: String) {
+        _manualTotalText.value = text.trim().ifEmpty { null }
+    }
+
+    fun resetManualTotal() {
+        _manualTotalText.value = null
+    }
 
     // 待开单相关状态
     private val _sourcePendingFileName = MutableStateFlow<String?>(null)
@@ -165,6 +194,13 @@ class OrderViewModel(
     private fun setCart(items: List<OrderItem>) {
         currentCart().value = items
         _orderItems.value = items
+        // ⚠ 购物车一变就**清掉手工总额**，让它重新跟随计算值。
+        //
+        // 保留的话会静默少收钱：用户抹零到 100.00，然后又补扫了一件 20 块的商品，
+        // 计算值变成 120，而框里还写着 100 —— 上传出去的就是 100。
+        // 抹零本来就是结账前最后一步，清掉它比留着安全，而且框里的数字会当场跳回
+        // 计算值，用户看得见。
+        _manualTotalText.value = null
     }
 
     private fun saveOrder() {
@@ -399,21 +435,20 @@ class OrderViewModel(
      */
     fun blockOrder() {
         val missing = CartPricing.missingBoxSize(cartLines())
-        enqueue(missingBoxSizeBarcodes = missing, manualTotalCents = null, writer = null, remarkText = null)
+        enqueue(missingBoxSizeBarcodes = missing, manualTotalCents = null, remarkText = null)
     }
 
     /**
-     * 确定并上传。
+     * 确认并上传。
      *
-     * @param writer 归属人。可以是别的店员（代传）—— 服务端不校验 writer 与登录身份
-     *        是否一致，而现实中存在"某店员的账号永远不再登录，但他开的单仍需上传"。
-     *        ⚠ 上传之后**改不了**：服务端没有任何接口能修改已上传订单的 writer。
+     * 归属人**不接受参数**，一律是 [defaultWriter]（当前登录用户名）。
+     * 理由见 [CheckoutDialog] 的 `writer` 参数注释：在收银台上给一个可编辑的
+     * 归属人选择器纯粹是误操作来源，而选错一次这一单就永久记在别人名下。
      */
-    fun confirmCheckout(writer: String, manualTotalCents: Long?, remarkText: String?) {
+    fun confirmCheckout(remarkText: String?) {
         enqueue(
             missingBoxSizeBarcodes = emptyList(),
             manualTotalCents = manualTotalCents,
-            writer = writer,
             remarkText = remarkText,
         )
     }
@@ -421,7 +456,6 @@ class OrderViewModel(
     private fun enqueue(
         missingBoxSizeBarcodes: List<String>,
         manualTotalCents: Long?,
-        writer: String?,
         remarkText: String?,
     ) {
         val ob = outbox
@@ -438,7 +472,9 @@ class OrderViewModel(
         // ⚠ A 类**必须** month = null：服务端 validateTypeAndMonth 对 month<1||month>12 直接 400。
         val req = CartPricing.toRequest(
             lines = lines,
-            writer = writer?.takeIf { it.isNotBlank() } ?: loginName().ifBlank { owner },
+            // 一律是当前登录用户名。离线且从没登录过时会是空串 —— 那时
+            // CheckoutDialog 的"确定"是禁用的，走不到这里。
+            writer = defaultWriter().ifBlank { owner },
             ts = System.currentTimeMillis(),
             fileType = if (purchase) OrderFileId.TYPE_A else OrderFileId.TYPE_B,
             year = cal.get(Calendar.YEAR),

@@ -3,9 +3,11 @@ package com.example.myapplication.ui.orders
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myapplication.data.DriftedOrder
+import com.example.myapplication.data.OrderDetail
 import com.example.myapplication.data.OrderRepository
 import com.example.myapplication.data.OrderRow
 import com.example.myapplication.data.PriceDrift
+import com.example.myapplication.sync.OrderFileId
 import com.example.myapplication.sync.outbox.OutboxUploader
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -13,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -91,13 +94,41 @@ class OrdersViewModel(
     private val _report = MutableStateFlow<String?>(null)
     val report: StateFlow<String?> = _report.asStateFlow()
 
+    /**
+     * 按开单模式筛选。
+     *
+     * 销售模式下不该看到进货单，反之亦然 —— 两者混在一个列表里，
+     * 用户会把 A 类进货单当成一笔营收，而它既不计营收也不扣库存。
+     * null = 不按模式筛（两种都看）。
+     */
+    private val _fileType = MutableStateFlow<String?>(OrderFileId.TYPE_B)
+    val fileType: StateFlow<String?> = _fileType.asStateFlow()
+
+    fun setFileType(type: String?) {
+        _fileType.value = type
+    }
+
     val rows: StateFlow<List<OrderRow>> =
-        combine(_range, _writer) { r, w -> r to w }
-            .flatMapLatest { (r, w) ->
+        combine(_range, _writer, _fileType) { r, w, t -> Triple(r, w, t) }
+            .flatMapLatest { (r, w, t) ->
                 val (from, to) = r.bounds(now(), timeZone())
-                repo.orders(from, to, w)
+                repo.orders(from, to, w).map { rows ->
+                    if (t == null) rows else rows.filter { it.fileType == t }
+                }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 点某一笔订单时加载的明细。null = 没打开详情。 */
+    private val _detail = MutableStateFlow<OrderDetail?>(null)
+    val detail: StateFlow<OrderDetail?> = _detail.asStateFlow()
+
+    fun openDetail(row: OrderRow) {
+        viewModelScope.launch { _detail.value = repo.detail(row) }
+    }
+
+    fun closeDetail() {
+        _detail.value = null
+    }
 
     fun setRange(r: OrderRange) {
         _range.value = r

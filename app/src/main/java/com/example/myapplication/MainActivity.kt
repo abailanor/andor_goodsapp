@@ -93,6 +93,9 @@ sealed class Screen(val route: String) {
 /** 底部导航的五个位置，顺序即显示顺序。 */
 private val BOTTOM_TABS = listOf(
     Screen.Order to "开单",
+    // 待开单回到导航栏：它是开单流程的一部分（挂起 → 之后取回），
+    // 藏在「我的」里面等于每次取单都要多点两下，而收银台是按秒算的。
+    Screen.PendingOrders to "待开单",
     Screen.Orders to "订单",
     Screen.ProductManagement to "商品",
     Screen.Stats to "统计",
@@ -204,7 +207,10 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
 
                 // 模式切换条吸顶：底色会在列表滚动后被盖住，但这一条永远看得见。
                 Column(Modifier.fillMaxSize()) {
-                    ModeSwitchBar()
+                    // ⚠ 必须把切换**转发给 ViewModel**。切换条自己只改全局的
+                    // CurrentOrderMode，而购物车是 ViewModel 里的两辆车 ——
+                    // 不转发的话底色变了、车没换，用户看到的还是销售单的内容。
+                    ModeSwitchBar(onModeChanged = { viewModel.setMode(it) })
                     Box(Modifier.weight(1f)) {
                         OrderScreen(viewModel = viewModel, aiViewModel = sharedAIViewModel)
                     }

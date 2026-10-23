@@ -843,22 +843,16 @@ fun OrderDetailBottomSheet(
                         )
                     }
 
-                    OutlinedTextField(
-                        value = item.quantity.toString(),
-                        onValueChange = { value ->
-                            val newQuantity = value.toIntOrNull() ?: 0
-                            editedItems = editedItems.map { editedItem ->
-                                if (editedItem.barcode == item.barcode) {
-                                    editedItem.copy(quantity = newQuantity)
-                                } else {
-                                    editedItem
-                                }
-                            }
-                        },
-                        label = { Text("数量") },
-                        singleLine = true,
+                    // ⚠ 只读。这里原来是一个可编辑的数量输入框 ——
+                    // 但历史订单是**已经发生过**的交易，改它的数量等于改账：
+                    // 小票已经打给顾客了、统计已经算进去了，而这里改完只动一个
+                    // 本地 JSON 文件，两边从此对不上，且没有任何一处会报错。
+                    // 要修正一笔旧单，正确的做法是取消它再开一张新的。
+                    Text(
+                        text = "×${item.quantity}",
+                        style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.width(70.dp),
-                        textStyle = MaterialTheme.typography.bodySmall
+                        textAlign = TextAlign.End
                     )
                 }
             }
@@ -881,33 +875,8 @@ fun OrderDetailBottomSheet(
                         Text("删除订单")
                     }
 
-                    Button(
-                        onClick = {
-                            val validItems = editedItems.filter { it.quantity > 0 }
-                            val total = validItems.sumOf {
-                                it.price.toBigDecimalOrNull()?.multiply(it.quantity.toBigDecimal())
-                                    ?: BigDecimal.ZERO
-                            }
-
-                            onSave(
-                                orderFile.record.copy(
-                                    items = validItems.map { item ->
-                                        item.copy(
-                                            subtotal = (item.price.toBigDecimalOrNull()
-                                                ?.multiply(item.quantity.toBigDecimal())
-                                                ?: BigDecimal.ZERO).toPlainString()
-                                        )
-                                    },
-                                    totalPrice = total.toPlainString()
-                                )
-                            )
-                        },
-                        modifier = Modifier.weight(1f),
-                        enabled = editedItems.any { it.quantity > 0 }
-                    ) {
-                        Text("保存修改")
-                    }
-
+                    // 「保存修改」按钮已移除：数量改成只读之后没有任何可编辑的东西了。
+                    // 留着它等于摆一个按下去什么都不发生的按钮，而用户会以为改成功了。
                 }
                 Button(
                     onClick = onPrint,

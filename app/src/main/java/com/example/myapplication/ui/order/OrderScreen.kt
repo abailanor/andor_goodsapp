@@ -32,6 +32,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
+import com.example.myapplication.core.money.Money
+import com.example.myapplication.data.CartPricing
 import com.example.myapplication.data.OrderItem
 import com.example.myapplication.data.Product
 import com.example.myapplication.ui.OrderMode
@@ -62,7 +64,8 @@ fun OrderScreen(
     val soundEnabled by viewModel.soundEnabled.collectAsState()
     val mode by viewModel.mode.collectAsState()
     val checkout by viewModel.checkout.collectAsState()
-    val clerkNames by viewModel.clerkNames.collectAsState()
+    val manualTotalText by viewModel.manualTotalText.collectAsState()
+    val manualTotalInvalid = viewModel.manualTotalInvalid
 
     // AI 预选输入
 
@@ -118,17 +121,49 @@ fun OrderScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            // 进货模式**不显示总计**：服务端根本不存储买入价，
-                            // 本地目录里的 price 是卖出价 —— 拿它算进货总额是编数字。
-                            if (mode == OrderMode.SALE) {
+                        if (mode == OrderMode.SALE) {
+                            // 计算值 + 可改的框并排。框里实时跟着计算值走，
+                            // 用户一旦动手改就变成手工总额（抹零），改完还能一键还原。
+                            Column {
                                 Text(text = "总计", style = MaterialTheme.typography.bodySmall)
                                 Text(
                                     text = PriceFormatter.format(totalPrice),
                                     style = MaterialTheme.typography.titleLarge,
                                     color = MaterialTheme.colorScheme.primary
                                 )
-                            } else {
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            OutlinedTextField(
+                                // null = 没改过 → 显示实时计算值
+                                value = manualTotalText ?: PriceFormatter.format(totalPrice),
+                                onValueChange = { viewModel.setManualTotal(it) },
+                                label = { Text("实收") },
+                                supportingText = {
+                                    when {
+                                        manualTotalInvalid -> Text(
+                                            "格式不对",
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                        manualTotalText != null -> Text("点右侧还原")
+                                        else -> Text("可改，用于抹零")
+                                    }
+                                },
+                                isError = manualTotalInvalid,
+                                singleLine = true,
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+                                ),
+                                trailingIcon = {
+                                    if (manualTotalText != null) {
+                                        TextButton(onClick = { viewModel.resetManualTotal() }) { Text("还原") }
+                                    }
+                                },
+                                modifier = Modifier.width(130.dp)
+                            )
+                        } else {
+                            // 进货模式**不显示任何金额**：服务端根本不存储买入价，
+                            // 本地目录里的 price 是卖出价 —— 拿它算进货总额是编数字。
+                            Column {
                                 Text(text = "进货单", style = MaterialTheme.typography.bodySmall)
                                 Text(
                                     text = "${orderItems.size} 个品种（不计金额）",
@@ -137,11 +172,15 @@ fun OrderScreen(
                                 )
                             }
                         }
+                        Spacer(Modifier.weight(1f))
+                        // ⚠ 叫「上传」不叫「结算」：按下它这一单就进 outbox 并**立刻尝试上传**，
+                        // 用户必须知道钱已经离开这台设备了。叫"结算"的话，
+                        // 离线时用户会以为"只是本地记一笔"，而实际上它排队等着上传。
                         Button(
                             onClick = { viewModel.startCheckout() },
-                            enabled = orderItems.isNotEmpty()
+                            enabled = orderItems.isNotEmpty() && !manualTotalInvalid
                         ) {
-                            Text(if (mode == OrderMode.SALE) "结算" else "结算进货单")
+                            Text(if (mode == OrderMode.SALE) "上传" else "上传进货单")
                         }
                     }
                     Spacer(Modifier.height(6.dp))
@@ -166,8 +205,11 @@ fun OrderScreen(
                         }
                         OutlinedButton(
                             onClick = {
-                                // 打印前保存一份历史订单（按年/月/日文件夹）
-                                viewModel.saveOrderToHistory()
+                                // ⚠ 这里**不再**调 saveOrderToHistory()。
+                                // 它往 filesDir/Orders/ 下写 JSON，那是迁移前的旧存储；
+                                // 新订单已经在「上传」时进了 order_outbox → order_index。
+                                // 两边都写的后果是同一笔单在旧历史页和新订单页各出现一次，
+                                // 而用户会以为开了两单。旧历史页从此只显示迁移前的老数据。
                                 val receipt = PrintUtil.generateReceipt(orderItems, totalPrice)
                                 PrintService.printReceipt(context, receipt)
                             },
@@ -385,7 +427,8 @@ fun OrderScreen(
                             onRemove = {
                                 viewModel.removeItem(item.product.barcode)
                             },
-                            viewModel=viewModel
+                            viewModel=viewModel,
+                            mode = mode
                         )
                     }
                 }
@@ -558,15 +601,13 @@ fun OrderScreen(
 
             is CheckoutStep.Ready -> CheckoutDialog(
                 lines = step.lines,
-                defaultWriter = viewModel.defaultWriter(),
-                clerkNames = clerkNames,
+                writer = viewModel.defaultWriter(),
+                manualTotalCents = viewModel.manualTotalCents,
                 isPurchase = mode == OrderMode.PURCHASE,
                 // 设了整箱价却没箱规的商品会被按散卖计价 —— 整箱价被忽略、多收顾客的钱，
-                // 而票面自洽看不出来。所以必须在结算框里说出来，不能等到打完小票。
+                // 而票面自洽看不出来。所以必须在上传前说出来，不能等到打完小票。
                 ambiguousCount = step.ambiguous.size,
-                onConfirm = { writer, manualTotal, remark ->
-                    viewModel.confirmCheckout(writer, manualTotal, remark)
-                },
+                onConfirm = { remark -> viewModel.confirmCheckout(remark) },
                 onDismiss = { viewModel.dismissCheckout() },
             )
 
@@ -675,7 +716,9 @@ fun OrderItemCard(
     onQuantityChange: (Int) -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: OrderViewModel
+    viewModel: OrderViewModel,
+    /** 进货模式下这一行**不显示任何金额**，见下面的注释。 */
+    mode: OrderMode = OrderMode.SALE,
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -752,46 +795,48 @@ fun OrderItemCard(
                 .padding(horizontal = 16.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-                if (orderItem.product.barcode[0] == '0') {
-                    Button(
-                        contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier
-                            .height(28.dp) ,
-                        onClick = {
-                            viewModel.scanBarcode(orderItem.product.barcode.substring(1))
-                            onRemove()
+                // ⚠ 这里原来有一个"件/个"切换按钮，点它去扫 `"0"+barcode` 或
+                // `barcode.substring(1)`。那是 v3 的约定（整件靠额外插一行 0 前缀表示），
+                // 而 MIGRATION_3_4 / BoxRowMerger 的作用正是把那两行**合并成一条** ——
+                // 合并之后 `0<barcode>` 这个商品已经不存在了，所以那个按钮点了必然
+                // 报"未找到商品"。箱/个的拆分现在由 CartPricing.fromTotalQuantity
+                // 按箱规自动做（数了 30 个就输 30），不需要用户手动切。
+
+            // 计算过程。
+            // ⚠ 用 CartLine 的金额，**不是** `orderItem.subtotal`（= 单价 × 数量）：
+            // 整箱价 ≠ 箱规 × 单价，所以后者在有整箱参与时是错的 —— 30 个会显示
+            // 3.50 × 30 = 105.00，而实际收 1 箱(80) + 6 个(21) = 101.00。
+            // 行内显示的数与结算框、小票必须是同一个，否则顾客当场就会发现对不上。
+            val line = remember(orderItem) {
+                CartPricing.fromTotalQuantity(orderItem.product, orderItem.quantity)
+            }
+            if (mode == OrderMode.PURCHASE) {
+                // 进货模式：不显示任何金额。本地目录里的 price 是**卖出价**，
+                // 摆在进货单上会被当成成本价看，而系统里根本没有买入价。
+                Text(
+                    text = "${orderItem.quantity} 件",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                )
+            } else {
+                Text(
+                    text = buildString {
+                        append(Money.fromCents(line?.unitPriceCents ?: 0L)).append("/个")
+                        if ((line?.boxes ?: 0) > 0) {
+                            append(" · ").append(line!!.boxes).append("箱")
+                            if (line.singles > 0) append(" + ").append(line.singles).append("个")
+                            append(" = ")
+                        } else {
+                            append(" × ").append(orderItem.quantity).append(" = ")
                         }
-
-                    ) {
-                        Text(text="件",fontSize = 12.sp,)
-                    }
-                } else {
-                    Button(
-                        contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier
-                            .height(28.dp),
-                        onClick = {
-                            viewModel.scanBarcode("0" + orderItem.product.barcode)
-                            onRemove()
-                        }
-                    ) {
-                        Text(text="个",fontSize = 12.sp,)
-                    }
-                }
-
-
-            // 计算过程
-            Text(
-                text = "${PriceFormatter.format(orderItem.product.price)} × ${orderItem.quantity} = ${
-                    PriceFormatter.format(
-                        orderItem.subtotal
-                    )
-                }",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 6.dp),
-
-            )
+                        append(Money.fromCents(line?.amountCents ?: 0L))
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                )
+            }
         }
     }
 }

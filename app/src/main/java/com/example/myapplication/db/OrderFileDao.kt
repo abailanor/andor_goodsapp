@@ -831,6 +831,24 @@ interface OrderFileDao {
     fun observeOutboxPending(storeKey: String): Flow<List<OrderOutboxEntity>>
 
     /**
+     * 一笔订单的明细行，按 (fileId, lineNo) 排序。订单详情页用。
+     *
+     * 按 **uuid** 查而不是 (fileId, uuid)：UI 手上的列表行不带 fileId
+     * （`OrderRow` 省掉了那一列），而一笔订单不可能跨文件 ——
+     * 拆单是同一个 fileId 下的多行、各自有独立 uuid。
+     * 真出现了同 uuid 跨文件（那已经是"服务端不查重"级别的事故），
+     * 全列出来比只列一个文件更容易看出问题。
+     */
+    @Query(
+        """
+        SELECT * FROM order_item_index
+        WHERE storeKey = :storeKey AND orderUuid = :orderUuid
+        ORDER BY fileId, lineNo
+        """
+    )
+    suspend fun orderItemsOfUuid(storeKey: String, orderUuid: String): List<OrderItemIndexEntity>
+
+    /**
      * 按 `dimKey`（`<yyyy-MM-dd>|w:<writer>`）与 `metric` 聚合的贡献合计。
      *
      * ## 为什么用 `substr(dimKey, 1, 10)` 裁区间

@@ -1,5 +1,6 @@
 package com.example.myapplication.ui.orders
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,10 +8,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -29,7 +32,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.core.money.Money
 import com.example.myapplication.data.DriftedOrder
+import com.example.myapplication.data.OrderDetail
 import com.example.myapplication.data.OrderRow
+import com.example.myapplication.sync.OrderFileId
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +59,8 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
     val busy by viewModel.busy.collectAsState()
     val report by viewModel.report.collectAsState()
     val drift by viewModel.drift.collectAsState()
+    val fileType by viewModel.fileType.collectAsState()
+    val detail by viewModel.detail.collectAsState()
 
     // 进页面时扫一次。不做成 Flow 是因为它要查商品表，
     // 而商品价格会随同步频繁变化 —— 跟着每次变化重扫会把列表刷个不停。
@@ -71,6 +78,28 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
                     label = { Text(r.label) },
                 )
             }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // 销售 / 进货 / 全部。⚠ 必须能筛：两者混在一个列表里，
+        // 用户会把 A 类进货单当成一笔营收，而它既不计营收也不扣库存。
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = fileType == OrderFileId.TYPE_B,
+                onClick = { viewModel.setFileType(OrderFileId.TYPE_B) },
+                label = { Text("销售") },
+            )
+            FilterChip(
+                selected = fileType == OrderFileId.TYPE_A,
+                onClick = { viewModel.setFileType(OrderFileId.TYPE_A) },
+                label = { Text("进货") },
+            )
+            FilterChip(
+                selected = fileType == null,
+                onClick = { viewModel.setFileType(null) },
+                label = { Text("全部") },
+            )
         }
 
         Spacer(Modifier.height(8.dp))
@@ -143,6 +172,7 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
                 items(rows, key = { it.orderUuid }) { row ->
                     OrderRowView(
                         row = row,
+                        onClick = { viewModel.openDetail(row) },
                         checked = row.orderUuid in selected,
                         // 只有 READY 能勾：其余状态勾了也发不出去，
                         // 而"已选 N 笔"这个数字骗人比不给勾更糟。
@@ -154,8 +184,134 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
                 }
             }
         }
+
+        detail?.let { d ->
+            OrderDetailDialog(detail = d, onDismiss = { viewModel.closeDetail() })
+        }
     }
 }
+
+/**
+ * 订单详情。
+ *
+ * 已同步与未上传两条来路在这里**长得一样**（见 [OrderRepository.detail]）——
+ * 未上传的单没有 `order_item_index` 行，明细是从 `order_outbox.payload` 解析出来的。
+ * 用户不该因为一笔单还没传上去就看不到它买了什么。
+ */
+@Composable
+private fun OrderDetailDialog(detail: OrderDetail, onDismiss: () -> Unit) {
+    val purchase = detail.fileType == OrderFileId.TYPE_A
+    val b = detail.breakdown
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        title = { Text(if (purchase) "进货单" else "销售单") },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    buildString {
+                        append(TS_DETAIL.format(Date(detail.orderTs)))
+                        append(" · ").append(detail.writer.ifEmpty { "（未署名）" })
+                        if (detail.groupId.isNotEmpty()) append(" · 组 ${detail.groupId.take(4)}")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    when (detail.source) {
+                        OrderRow.Source.SYNCED -> "已同步"
+                        OrderRow.Source.PENDING_READY -> "未上传"
+                        OrderRow.Source.PENDING_BLOCKED -> "未上传 · 缺箱规"
+                        OrderRow.Source.PENDING_IN_FLIGHT -> "已发出、结果未知"
+                        OrderRow.Source.PENDING_FAILED -> "上传失败"
+                        OrderRow.Source.DRAFT -> "草稿"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+
+                LazyColumn(Modifier.heightIn(max = 260.dp)) {
+                    items(detail.lines, key = { "${it.barcode}:${it.quantity}" }) { l ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(l.name.ifEmpty { l.barcode }, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    buildString {
+                                        append(l.barcode).append(" · ").append(l.quantity).append(" 件")
+                                        // ⚠ 单价缺失就不显示（早期订单没有这一列）。
+                                        // 绝不拿当前目录价补 —— 那会让一张历史单的金额
+                                        // 随着后来越改越不对，而顾客手里那张纸是不变的。
+                                        l.unitPriceCents?.let {
+                                            append(" · ").append(Money.fromCents(it)).append("/个")
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (!purchase) {
+                                Text(Money.fromCents(l.amountCents), style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+
+                if (!purchase) {
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    // 与打印小票同一套规则（ReceiptMath）：≤0 不显示。
+                    // 屏幕上看到的与打印出来的必须是同一份数字。
+                    if (b.showDiscount) DetailRow("折扣（整箱优惠）", "-" + Money.fromCents(b.discount!!))
+                    DetailRow("行金额合计", Money.fromCents(b.amountSum))
+                    if (b.showRounding) DetailRow("抹零", "-" + Money.fromCents(b.rounding))
+                    DetailRow("合计", Money.fromCents(detail.totalCents), emphasized = true)
+                    if (detail.manualTotal) {
+                        Text(
+                            "含手工调整：明细加起来不等于合计",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                } else {
+                    Spacer(Modifier.height(8.dp))
+                    DetailRow("品种数", "${detail.lines.size}", emphasized = true)
+                    DetailRow("总件数", detail.lines.sumOf { it.quantity }.toString())
+                }
+
+                detail.remark?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text("备注：$it", style = MaterialTheme.typography.bodySmall)
+                }
+
+                Spacer(Modifier.height(8.dp))
+                // uuid 要能看见：报障时对服务端日志、以及在「订单」页里定位重复单都靠它
+                Text(
+                    detail.orderUuid,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+    )
+}
+
+@Composable
+private fun DetailRow(label: String, value: String, emphasized: Boolean = false) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            style = if (emphasized) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            value,
+            style = if (emphasized) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+private val TS_DETAIL = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
 
 /**
  * 价格漂移提示卡。
@@ -217,13 +373,16 @@ private const val MAX_DRIFT_SHOWN = 5
 @Composable
 private fun OrderRowView(
     row: OrderRow,
+    onClick: () -> Unit,
     checked: Boolean,
     checkable: Boolean,
     onToggle: () -> Unit,
     onDiscard: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        // 整行可点开详情。⚠ 勾选框与删除按钮要**吃掉**自己的点击，
+        // 否则点勾选会同时弹出详情框。
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (row.source.isPending) {

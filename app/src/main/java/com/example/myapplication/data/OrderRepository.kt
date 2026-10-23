@@ -6,6 +6,7 @@ import com.example.myapplication.db.OrderFileDao
 import com.example.myapplication.db.OrderIndexEntity
 import com.example.myapplication.db.OrderOutboxEntity
 import com.example.myapplication.sync.OrderFileId
+import com.example.myapplication.sync.OrderPayloadIndex
 import com.example.myapplication.sync.StatsProjection
 import com.example.myapplication.sync.outbox.OutboxStore
 import com.example.myapplication.sync.outbox.OutboxUploader
@@ -37,6 +38,13 @@ data class OrderRow(
     /** 空串 = 不是拆单。非空时同组的其它块要在 UI 上归到一起。 */
     val groupId: String,
     val source: Source,
+    /**
+     * `A` = 进货 / `B` = 销售（[com.example.myapplication.sync.OrderFileId.TYPE_A] / `TYPE_B`）。
+     *
+     * 订单页要按开单模式筛选：销售模式下不该看到进货单，反之亦然 ——
+     * 两者混在一个列表里，用户会以为进货单也是一笔营收。
+     */
+    val fileType: String,
     /** `true` = 总额被手动覆盖过（`Σ items.amount != total`）。UI 要打标记，不静默取其一。 */
     val manualTotal: Boolean,
     val remark: String?,
@@ -150,6 +158,47 @@ class OrderRepository(
     suspend fun discard(orderUuid: String): Int = outbox.discard(storeKey(), ownerName(), orderUuid)
 
     /**
+     * 一笔订单的明细。
+     *
+     * ## ⚠ 两个来源，一套结果
+     *
+     * 已同步的单从 `order_item_index` 读；未上传的单**没有**索引行（它还没进镜像），
+     * 明细只能从 `order_outbox.payload` 里解析。两者必须归一成同一个形状，
+     * 否则详情页要写两套渲染，而"未上传的单看不到明细"正是用户会当成 bug 报的那种缺失。
+     *
+     * `unitPriceCents` 为 null 表示那一行没有单价（早期写入的订单）——
+     * 详情页与 `ReceiptMath` 一样，缺了就**不显示**折扣，绝不拿当前目录价补。
+     */
+    suspend fun detail(row: OrderRow): OrderDetail? {
+        val key = storeKey()
+        val lines: List<OrderDetailLine> = if (row.source == OrderRow.Source.SYNCED) {
+            // SYNCED 行来自 order_index，它的 fileId 没存进 OrderRow（省一列），
+            // 但 order_item_index 的主键需要它 —— 用 uuid 在两张表里都能定位，
+            // 所以这里直接按 uuid 查全部 fileId 下的行。一笔订单不会跨文件。
+            dao.orderItemsOfUuid(key, row.orderUuid).map {
+                OrderDetailLine(it.barcode, it.name, it.quantity, it.amountCents, null)
+            }
+        } else {
+            val payload = dao.outboxRow(key, row.orderUuid)?.payload ?: return null
+            OrderPayloadIndex.parse(payload)?.items?.map {
+                OrderDetailLine(it.barcode, it.name, it.quantity, it.amountCents, it.unitPriceCents)
+            } ?: emptyList()
+        }
+        return OrderDetail(
+            orderUuid = row.orderUuid,
+            writer = row.writer,
+            orderTs = row.orderTs,
+            totalCents = row.totalCents,
+            fileType = row.fileType,
+            source = row.source,
+            manualTotal = row.manualTotal,
+            remark = row.remark,
+            groupId = row.groupId,
+            lines = lines,
+        )
+    }
+
+    /**
      * 箱规补齐之后重新核对所有挂起的单。
      *
      * @param hasBoxSize 由调用方查商品表提供 —— [OutboxStore] 故意不持有 `ProductDao`，
@@ -192,6 +241,9 @@ class OrderRepository(
                     status = s.status,
                     groupId = s.groupId.orEmpty(),
                     source = OrderRow.Source.SYNCED,
+                    // order_index 不存 fileType 列，但 fileId 的第一个字符就是它
+                    // （`A:<owner>:<年>` / `B:<owner>:<年>-<月>`，见 OrderFileId）。
+                    fileType = s.fileId.take(1),
                     manualTotal = s.manualTotal,
                     remark = s.remark,
                 )
@@ -209,6 +261,7 @@ class OrderRepository(
                     status = 1,
                     groupId = p.groupId,
                     source = sourceOf(p.state),
+                    fileType = p.fileType,
                     manualTotal = false,
                     remark = null,
                     detail = detailOf(p),
@@ -244,6 +297,40 @@ class OrderRepository(
             else -> null
         }
     }
+}
+
+/** 订单详情的一行。已同步与未上传两条来路都归一成这个形状，见 [OrderRepository.detail]。 */
+data class OrderDetailLine(
+    val barcode: String,
+    val name: String,
+    val quantity: Int,
+    val amountCents: Long,
+    /** null = 这一行没有单价（早期写入的订单）。缺了就别显示折扣，不要拿目录价补。 */
+    val unitPriceCents: Long?,
+)
+
+/** 一笔订单的完整信息，给详情页/打印用。 */
+data class OrderDetail(
+    val orderUuid: String,
+    val writer: String,
+    val orderTs: Long,
+    val totalCents: Long,
+    val fileType: String,
+    val source: OrderRow.Source,
+    val manualTotal: Boolean,
+    val remark: String?,
+    val groupId: String,
+    val lines: List<OrderDetailLine>,
+) {
+    /**
+     * 小票底部那两行。与 [ReceiptMath] 共用同一套规则（≤0 不显示），
+     * 因为屏幕上看到的与打印出来的必须是同一份数字。
+     */
+    val breakdown: ReceiptMath.Breakdown
+        get() = ReceiptMath.of(
+            lines.map { OrderPayloadIndex.Item(it.barcode, it.name, it.quantity, it.amountCents, it.unitPriceCents) },
+            totalCents,
+        )
 }
 
 /**

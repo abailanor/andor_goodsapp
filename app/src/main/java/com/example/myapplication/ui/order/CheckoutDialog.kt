@@ -1,6 +1,5 @@
 package com.example.myapplication.ui.order
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,10 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -36,71 +31,63 @@ import com.example.myapplication.data.CartLine
 import com.example.myapplication.data.CartPricing
 
 /**
- * 结算对话框。
+ * 上传前的确认框。
  *
- * ## 它要让用户在**按下确定之前**看见三件事
+ * ## 它**不是**录入界面
  *
- *  1. **单价 × 数量 ≠ 金额**。整箱价 ≠ 箱规 × 单价，所以这两个数天然对不上，
- *     而顾客会拿小票当场按计算器。底部的「折扣」行就是给这个差额一个交代。
- *  2. **手工改过总额**。改完之后 `Σ行金额 ≠ 合计`，必须显示「抹零」行，
- *     否则小票上的数字自己打自己。
- *  3. **这一单记在谁名下**（`writer`）。⚠ 归属人只能在下单这一刻定对 ——
- *     服务端没有任何接口能修改已上传订单的 `writer`，而且它**不校验** writer
- *     与登录身份是否一致（只验非空白），所以代传是合法的：现实中存在
- *     "某店员的账号永远不再登录，但他开的单仍需上传"的情况。
+ * 手工总额在开单页主界面上改（就放在"总计"旁边，边扫码边抹零），
+ * 归属人就是当前登录用户、这里只读展示。到了这一步所有数字都已经定了，
+ * 这个框只负责让用户**看一眼再确认**。
  *
- * ## ⚠ 手工总额是**覆盖**，不是"再打一个折"
+ * 之所以要这一眼：整箱价 ≠ 箱规 × 单价，所以"单价 × 数量"与"行金额"天然对不上，
+ * 而顾客会拿小票当场按计算器。底部的「折扣」行就是给这个差额一个交代 ——
+ * 但前提是用户在上传前看见过它。
  *
- * 存进 payload 的 `content.total` 就是权威总额，统计一律用它（`manualTotal` 标记
- * 只是告诉 UI"这一单的 Σitems 对不上 total，别装作对得上"）。
- * 所以这里输入的是**最终收多少钱**，不是"减多少"。
+ * @param writer 订单记在谁名下 = 当前登录用户名。**只读**，理由见下面那条注释。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheckoutDialog(
     lines: List<CartLine>,
-    /** 当前登录用户名，作为归属人的默认值。离线时可能是空串。 */
-    defaultWriter: String,
-    /** 同店其它店员的名字，供代传时选。可以为空（离线、或没有 EMPLOYEE_MANAGE 权限）。 */
-    clerkNames: List<String>,
-    /** A 类（进货）才需要备注；B 类传了会被 `OrderGroupAssembler` 直接拒掉。 */
+    /**
+     * ⚠ 这里曾经是一个可编辑的下拉框（为了"代传"：某店员的账号永远不再登录，
+     * 但他开的单仍需上传）。拿掉是因为在收银台上它纯粹是误操作来源 ——
+     * 选错一次，这一单就**永久**记在别人名下，而服务端没有任何接口能改
+     * 已上传订单的 writer（补丁只能等长覆写，且响应里不返回 writerOffset）。
+     *
+     * 代传如果真要做，应该放到「订单」页对**未上传**的单单独改，
+     * 而不是混在结账那一下里。
+     */
+    writer: String,
+    /** 主界面上填的手工总额。null = 没改过，总额就是 Σ 行金额。 */
+    manualTotalCents: Long?,
     isPurchase: Boolean,
     /**
      * 设了整箱价却没填箱规的商品数。这些会被按散卖计价 —— 整箱价被忽略、
      * **多收顾客的钱**，而票面自洽看不出来，所以必须在按下确定之前说出来。
      */
     ambiguousCount: Int = 0,
-    onConfirm: (writer: String, manualTotalCents: Long?, remarkText: String?) -> Unit,
+    onConfirm: (remarkText: String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var writer by remember { mutableStateOf(defaultWriter) }
-    var totalText by remember { mutableStateOf("") }
     var remark by remember { mutableStateOf("") }
-    var writerMenuOpen by remember { mutableStateOf(false) }
 
-    // manualTotalCents == null 表示"没手改"，此时 total 就是 Σ行金额。
-    // ⚠ 输入框留空 == null，而不是 0：0 是"这一单免费"，与"没改过"是两件事。
-    val manualTotal = totalText.trim().takeIf { it.isNotEmpty() }
-        ?.let { runCatching { Money.toCents(it) }.getOrNull() }
-    val totals = remember(lines, manualTotal) { CartPricing.totals(lines, manualTotal) }
+    val totals = remember(lines, manualTotalCents) { CartPricing.totals(lines, manualTotalCents) }
 
     // 归属人为空就不许提交：writer 是服务端必填字段（非空白），
-    // 而且统计是按它分组的 —— 空 writer 会让这一单归到"（未署名）"，
-    // 之后再也认不出是谁卖的。
+    // 而且统计按它分组 —— 空 writer 会让这一单归到"（未署名）"，之后再也认不出是谁卖的。
+    // 离线且从没登录过时就会是空的，那时该提示用户先去登录，而不是让他上传一张无主的单。
     val writerOk = writer.isNotBlank()
-    // 输入了一个解析不出来的金额时明确报错，不要静默当成"没改过"
-    val totalBad = totalText.isNotBlank() && manualTotal == null
 
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(writer.trim(), manualTotal, remark.trim().ifEmpty { null }) },
-                enabled = writerOk && !totalBad,
-            ) { Text("确定并上传") }
+                onClick = { onConfirm(remark.trim().ifEmpty { null }) },
+                enabled = writerOk,
+            ) { Text(if (isPurchase) "确认并上传进货单" else "确认并上传") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("返回修改") } },
-        title = { Text(if (isPurchase) "结算 · 进货单" else "结算") },
+        title = { Text(if (isPurchase) "上传进货单" else "上传订单") },
         text = {
             Column(Modifier.fillMaxWidth()) {
                 LazyColumn(Modifier.heightIn(max = 220.dp)) {
@@ -114,7 +101,8 @@ fun CheckoutDialog(
                                         // 摆在进货单上会被当成成本价看。
                                         if (!isPurchase) append(Money.fromCents(l.unitPriceCents)).append("/个")
                                         if (l.boxes > 0) {
-                                            append(" · ").append(l.boxes).append("箱")
+                                            if (!isPurchase) append(" · ")
+                                            append(l.boxes).append("箱")
                                             if (l.singles > 0) append(" + ")
                                         }
                                         if (l.singles > 0) append(l.singles).append("个")
@@ -150,7 +138,7 @@ fun CheckoutDialog(
 
                 if (isPurchase) {
                     // ⚠ 进货单**完全不显示金额**：服务端根本不存储买入价
-                    // （README 第 696 行"目录不含进货价"），本地目录里的 price 是卖出价。
+                    // （README:696"目录不含进货价"），本地目录里的 price 是卖出价。
                     // 拿卖出价算进货总额是编数字，而编出来的数字会被打印出去、被当成成本记账。
                     Text(
                         "进货单不计金额：系统里没有买入价，本地目录的价格是卖出价。",
@@ -172,58 +160,30 @@ fun CheckoutDialog(
                     TotalRow("应收", Money.fromCents(totals.total), emphasized = true)
                 }
 
-                // 手工总额只对销售单有意义：进货单根本没有金额，改什么都无从谈起。
-                if (!isPurchase) {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = totalText,
-                        onValueChange = { totalText = it },
-                        label = { Text("手工改总额（留空 = ${Money.fromCents(totals.amountSum)}）") },
-                        supportingText = {
-                            if (totalBad) {
-                                Text("金额格式不对，示例：100.00", color = MaterialTheme.colorScheme.error)
-                            } else {
-                                Text("填的是最终收多少钱，不是减多少")
-                            }
-                        },
-                        isError = totalBad,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
+                Spacer(Modifier.height(10.dp))
 
-                Spacer(Modifier.height(8.dp))
-                // 归属人：默认是自己，可以改成别的店员（代传）
-                ExposedDropdownMenuBox(expanded = writerMenuOpen, onExpandedChange = { writerMenuOpen = it }) {
-                    OutlinedTextField(
-                        value = writer,
-                        onValueChange = { writer = it },
-                        label = { Text("记在谁名下") },
-                        supportingText = {
-                            Text(
-                                if (clerkNames.isEmpty()) "上传之后**改不了**，请确认"
-                                else "可下拉选别的店员（代传）。上传之后**改不了**",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        },
-                        isError = !writerOk,
-                        singleLine = true,
-                        trailingIcon = if (clerkNames.isEmpty()) null else {
-                            { ExposedDropdownMenuDefaults.TrailingIcon(expanded = writerMenuOpen) }
-                        },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                // 归属人只读展示。让用户看见"这一单记在我名下"，
+                // 但不给他改的机会 —— 见上面 writer 参数的注释。
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "记在谁名下",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
                     )
-                    if (clerkNames.isNotEmpty()) {
-                        ExposedDropdownMenu(expanded = writerMenuOpen, onDismissRequest = { writerMenuOpen = false }) {
-                            for (name in clerkNames) {
-                                DropdownMenuItem(
-                                    text = { Text(name) },
-                                    onClick = { writer = name; writerMenuOpen = false },
-                                )
-                            }
-                        }
+                    if (writerOk) {
+                        Text(writer, style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        Text("未登录", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                     }
+                }
+                if (!writerOk) {
+                    Text(
+                        "没有登录就没法确定这一单记在谁名下，而 writer 是服务端必填字段、" +
+                            "统计也按它分组。请先在「我的」里登录。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
 
                 if (isPurchase) {
@@ -271,7 +231,7 @@ fun BoxSizeDialog(
     onDismiss: () -> Unit,
 ) {
     val inputs = remember(missing.map { it.product.barcode }) {
-        missing.associate { it.product.barcode to mutableStateOf("") }.mapValues { it.value }
+        missing.associate { it.product.barcode to mutableStateOf("") }
     }
 
     AlertDialog(
@@ -288,7 +248,7 @@ fun BoxSizeDialog(
             ) { Text("补齐箱规") }
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row {
                 TextButton(onClick = onDismiss) { Text("返回") }
                 TextButton(onClick = onBlock) { Text("整单挂起") }
             }
@@ -306,7 +266,7 @@ fun BoxSizeDialog(
                     Card(Modifier.fillMaxWidth()) {
                         Text(
                             "你的账号没有改价权限（补箱规需要 PRICE_CHANGE），" +
-                                "只能整单挂起等店主补齐。挂起的单会留在「订单 → 未上传」里，" +
+                                "只能整单挂起等店主补齐。挂起的单会留在「订单」页的未上传里，" +
                                 "箱规补上后自动放行，不会丢。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
