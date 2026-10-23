@@ -176,7 +176,19 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
         ) {
             composable(Screen.Order.route) {
                 val context = LocalContext.current
-                val viewModel = remember { OrderViewModel(repository, context) }
+                val viewModel = remember {
+                    OrderViewModel(
+                        repository = repository,
+                        context = context,
+                        outbox = locator.outboxStore,
+                        uploader = locator.outboxUploader,
+                        storeKey = { locator.currentStoreKey() },
+                        // ⚠ ownerName 拼 fileId，loginName 当 writer。两者在员工登录时**不同**，
+                        // 混用的后果是订单落进一个只有本机知道的私有文件（见 fileOwnerOrNull）。
+                        ownerName = { locator.currentOwnerName() },
+                        loginName = { locator.session.value?.username ?: "" },
+                    )
+                }
 
                 // 检查是否有待加载的待开单数据
                 LaunchedEffect(Unit) {

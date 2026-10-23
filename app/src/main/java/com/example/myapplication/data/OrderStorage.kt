@@ -18,12 +18,34 @@ data class OrderStorageData(
 )
 
 
+/**
+ * 开单页购物车的持久化。**销售与进货各一个槽位。**
+ *
+ * ## 为什么必须持久化、而且必须分两个
+ *
+ * 进货单常常是"边盘点边录"，录到一半被叫去收银、或者进程被国产 ROM 杀掉，
+ * 回来发现几十个条目全没了 —— 那比没有持久化更糟，因为用户会以为存过了。
+ *
+ * 分两个槽是因为两种模式的内容不兼容：销售车要算钱，进货车不算
+ * （服务端根本不存储买入价，本地目录里的 `price` 是**卖出价**）。
+ * 共用一个槽的话，从进货切回销售会看到一堆没有价格语义的条目。
+ *
+ * 切换模式**不清空**任何一边：两边的数据都留着，切回来还在。
+ */
 class OrderStorage(private val context: Context) {
-    private val prefs: SharedPreferences = 
+    private val prefs: SharedPreferences =
         context.getSharedPreferences("order_storage", Context.MODE_PRIVATE)
     private val gson = Gson()
 
+    private companion object {
+        /** 旧版本只有一个槽，键名就是这个。升级后把它当**销售车**读回来。 */
+        const val LEGACY_KEY = "order_data"
+
+        fun keyOf(mode: String) = "order_data_$mode"
+    }
+
     suspend fun saveOrderData(
+        mode: String,
         orderItems: List<OrderItem>,
         sourcePendingFileName: String? = null,
         targetPendingFileName: String? = null
@@ -42,18 +64,28 @@ class OrderStorage(private val context: Context) {
             )
 
             val json = gson.toJson(storageData)
-            prefs.edit().putString("order_data", json).apply()
+            val editor = prefs.edit().putString(keyOf(mode), json)
+            // 旧键一并清掉：它已经被搬进销售槽了，留着的话下一次"兼容读取"
+            // 会把一份陈旧的车再盖回来。
+            if (mode == "SALE") editor.remove(LEGACY_KEY)
+            editor.apply()
         }
     }
 
-
-    suspend fun loadOrderData(): OrderStorageData {
+    /**
+     * @param mode `"SALE"` / `"PURCHASE"`（[com.example.myapplication.ui.OrderMode] 的 name）。
+     *        用字符串而不是枚举是为了让这个类不依赖 ui 层。
+     */
+    suspend fun loadOrderData(mode: String): OrderStorageData {
         return withContext(Dispatchers.IO) {
-            val json = prefs.getString("order_data", null) ?: return@withContext OrderStorageData(
-                orderItems = emptyList(),
-                sourcePendingFileName = null,
-                targetPendingFileName = null
-            )
+            // 销售槽为空时回退读旧键：升级前正在编辑的车不能因为改了键名就丢掉
+            val json = prefs.getString(keyOf(mode), null)
+                ?: (if (mode == "SALE") prefs.getString(LEGACY_KEY, null) else null)
+                ?: return@withContext OrderStorageData(
+                    orderItems = emptyList(),
+                    sourcePendingFileName = null,
+                    targetPendingFileName = null
+                )
 
             try {
                 val type = object : TypeToken<OrderStorageData>() {}.type
@@ -90,9 +122,12 @@ class OrderStorage(private val context: Context) {
 //        return loadOrderData().orderItems
 //    }
     
-    suspend fun clearOrderItems() {
+    /** 只清当前模式那一个槽 —— 另一种模式的车不能跟着一起没。 */
+    suspend fun clearOrderItems(mode: String) {
         withContext(Dispatchers.IO) {
-            prefs.edit().remove("order_data").apply()
+            val editor = prefs.edit().remove(keyOf(mode))
+            if (mode == "SALE") editor.remove(LEGACY_KEY)
+            editor.apply()
         }
     }
 }

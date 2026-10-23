@@ -65,6 +65,11 @@ fun CheckoutDialog(
     clerkNames: List<String>,
     /** A 类（进货）才需要备注；B 类传了会被 `OrderGroupAssembler` 直接拒掉。 */
     isPurchase: Boolean,
+    /**
+     * 设了整箱价却没填箱规的商品数。这些会被按散卖计价 —— 整箱价被忽略、
+     * **多收顾客的钱**，而票面自洽看不出来，所以必须在按下确定之前说出来。
+     */
+    ambiguousCount: Int = 0,
     onConfirm: (writer: String, manualTotalCents: Long?, remarkText: String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -105,7 +110,9 @@ fun CheckoutDialog(
                                 Text(l.product.name, style = MaterialTheme.typography.bodyMedium)
                                 Text(
                                     buildString {
-                                        append(Money.fromCents(l.unitPriceCents)).append("/个")
+                                        // 进货模式不显示单价：那个数字是**卖出价**，
+                                        // 摆在进货单上会被当成成本价看。
+                                        if (!isPurchase) append(Money.fromCents(l.unitPriceCents)).append("/个")
                                         if (l.boxes > 0) {
                                             append(" · ").append(l.boxes).append("箱")
                                             if (l.singles > 0) append(" + ")
@@ -117,41 +124,74 @@ fun CheckoutDialog(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            Text(Money.fromCents(l.amountCents), style = MaterialTheme.typography.bodyMedium)
+                            if (isPurchase) {
+                                Text("${l.quantity ?: 0} 件", style = MaterialTheme.typography.bodyMedium)
+                            } else {
+                                Text(Money.fromCents(l.amountCents), style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
                     }
                 }
 
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
-                // 折扣：整箱优惠。≤0 不显示（用户定的规则，打印与屏幕一致）
-                if (totals.showDiscount) {
-                    TotalRow("折扣（整箱优惠）", "-" + Money.fromCents(totals.discount!!))
+                if (ambiguousCount > 0) {
+                    Card(Modifier.fillMaxWidth()) {
+                        Text(
+                            "有 $ambiguousCount 个商品设了整箱价但没填箱规，本次按散卖计价 —— " +
+                                "也就是整箱价没生效、会多收钱。去商品管理里补上箱规就能享受整箱价。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(10.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
-                TotalRow("行金额合计", Money.fromCents(totals.amountSum))
-                // 抹零：手工调整。同样 ≤0 不显示
-                if (totals.showRounding) {
-                    TotalRow("抹零", "-" + Money.fromCents(totals.rounding))
-                }
-                TotalRow("应收", Money.fromCents(totals.total), emphasized = true)
 
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = totalText,
-                    onValueChange = { totalText = it },
-                    label = { Text("手工改总额（留空 = ${Money.fromCents(totals.amountSum)}）") },
-                    supportingText = {
-                        if (totalBad) {
-                            Text("金额格式不对，示例：100.00", color = MaterialTheme.colorScheme.error)
-                        } else {
-                            Text("填的是**最终收多少钱**，不是减多少")
-                        }
-                    },
-                    isError = totalBad,
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (isPurchase) {
+                    // ⚠ 进货单**完全不显示金额**：服务端根本不存储买入价
+                    // （README 第 696 行"目录不含进货价"），本地目录里的 price 是卖出价。
+                    // 拿卖出价算进货总额是编数字，而编出来的数字会被打印出去、被当成成本记账。
+                    Text(
+                        "进货单不计金额：系统里没有买入价，本地目录的价格是卖出价。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TotalRow("品种数", "${lines.size}", emphasized = true)
+                    TotalRow("总件数", lines.sumOf { it.quantity ?: 0 }.toString())
+                } else {
+                    // 折扣：整箱优惠。≤0 不显示（用户定的规则，打印与屏幕一致）
+                    if (totals.showDiscount) {
+                        TotalRow("折扣（整箱优惠）", "-" + Money.fromCents(totals.discount!!))
+                    }
+                    TotalRow("行金额合计", Money.fromCents(totals.amountSum))
+                    // 抹零：手工调整。同样 ≤0 不显示
+                    if (totals.showRounding) {
+                        TotalRow("抹零", "-" + Money.fromCents(totals.rounding))
+                    }
+                    TotalRow("应收", Money.fromCents(totals.total), emphasized = true)
+                }
+
+                // 手工总额只对销售单有意义：进货单根本没有金额，改什么都无从谈起。
+                if (!isPurchase) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = totalText,
+                        onValueChange = { totalText = it },
+                        label = { Text("手工改总额（留空 = ${Money.fromCents(totals.amountSum)}）") },
+                        supportingText = {
+                            if (totalBad) {
+                                Text("金额格式不对，示例：100.00", color = MaterialTheme.colorScheme.error)
+                            } else {
+                                Text("填的是最终收多少钱，不是减多少")
+                            }
+                        },
+                        isError = totalBad,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
 
                 Spacer(Modifier.height(8.dp))
                 // 归属人：默认是自己，可以改成别的店员（代传）

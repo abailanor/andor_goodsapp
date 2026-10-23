@@ -34,6 +34,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import com.example.myapplication.data.OrderItem
 import com.example.myapplication.data.Product
+import com.example.myapplication.ui.OrderMode
 import com.example.myapplication.ui.ai.AIViewModel
 import com.example.myapplication.ui.print.PrintService
 import com.example.myapplication.ui.print.PrintUtil
@@ -59,6 +60,9 @@ fun OrderScreen(
     val sourcePendingFileName by viewModel.sourcePendingFileName.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
     val soundEnabled by viewModel.soundEnabled.collectAsState()
+    val mode by viewModel.mode.collectAsState()
+    val checkout by viewModel.checkout.collectAsState()
+    val clerkNames by viewModel.clerkNames.collectAsState()
 
     // AI 预选输入
 
@@ -98,55 +102,77 @@ fun OrderScreen(
                 modifier = Modifier
                     .padding(bottom = 0.dp)
             ) {
-                Row(
+                // 底部分两行：第一行是"总计 + 结算"（结账时唯一要看的两样东西），
+                // 第二行是三个次级动作。
+                //
+                // ⚠ 不要挤回一行。这一栏在窄屏上本来就排满了（当初"保存"前面那个
+                // 18dp 图标就是因此被删掉的），再加一个"结算"必然把文字截断或换行，
+                // 而收银台是站着用的、屏幕还常常是碎的。
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-//                        .windowInsetsPadding(WindowInsets.navigationBars),
-                        .padding(bottom = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
-                    Column {
-                        Text(
-                            text = "总计",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Text(
-                            text = PriceFormatter.format(totalPrice),
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            // 进货模式**不显示总计**：服务端根本不存储买入价，
+                            // 本地目录里的 price 是卖出价 —— 拿它算进货总额是编数字。
+                            if (mode == OrderMode.SALE) {
+                                Text(text = "总计", style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    text = PriceFormatter.format(totalPrice),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Text(text = "进货单", style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    text = "${orderItems.size} 个品种（不计金额）",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = { viewModel.startCheckout() },
+                            enabled = orderItems.isNotEmpty()
+                        ) {
+                            Text(if (mode == OrderMode.SALE) "结算" else "结算进货单")
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { viewModel.clearOrder() }
+                            onClick = { viewModel.clearOrder() },
+                            modifier = Modifier.weight(1f)
                         ) {
                             Text("清空")
                         }
-                        // 保存按钮
+                        // "挂起"就是原来的"保存"：存进待开单。改名是因为"保存"在
+                        // 有了结算之后含义不清 —— 用户会以为"保存"等于"这单成了"。
                         OutlinedButton(
-                            onClick = {
-                                if (orderItems.isNotEmpty()) {
-                                    viewModel.savePendingOrder()
-                                }
-                            },
-                            enabled = orderItems.isNotEmpty()
+                            onClick = { viewModel.savePendingOrder() },
+                            enabled = orderItems.isNotEmpty(),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            // ⚠ 这里**不要**加图标：这一栏（清空/保存/打印）在窄屏上已经排满了，
-                            // 一个 18dp 的图标 + 间距就会把"打印"挤到第二行或截断文字。
-                            Text("保存")
+                            Text("挂起")
                         }
-                        Button(
+                        OutlinedButton(
                             onClick = {
                                 // 打印前保存一份历史订单（按年/月/日文件夹）
                                 viewModel.saveOrderToHistory()
                                 val receipt = PrintUtil.generateReceipt(orderItems, totalPrice)
                                 PrintService.printReceipt(context, receipt)
                             },
-                            enabled = orderItems.isNotEmpty()
+                            enabled = orderItems.isNotEmpty(),
+                            modifier = Modifier.weight(1f)
                         ) {
                             Text("打印")
                         }
@@ -516,6 +542,36 @@ fun OrderScreen(
             )
         }
 
+        // ==================== 结算 ====================
+
+        when (val step = checkout) {
+            is CheckoutStep.NeedBoxSize -> BoxSizeDialog(
+                missing = step.lines,
+                // 补箱规要改商品，而改商品需要 PRICE_CHANGE 权限。
+                // B 级员工默认只有 SYNC_SUB + STOCK_CHANGE，他补不了 —— 只能整单挂起。
+                // 这一点必须写在界面上，否则员工会当成 bug 报。
+                canEditBoxSize = true,
+                onFill = { barcode, size -> viewModel.fillBoxSize(barcode, size) },
+                onBlock = { viewModel.blockOrder() },
+                onDismiss = { viewModel.dismissCheckout() },
+            )
+
+            is CheckoutStep.Ready -> CheckoutDialog(
+                lines = step.lines,
+                defaultWriter = viewModel.defaultWriter(),
+                clerkNames = clerkNames,
+                isPurchase = mode == OrderMode.PURCHASE,
+                // 设了整箱价却没箱规的商品会被按散卖计价 —— 整箱价被忽略、多收顾客的钱，
+                // 而票面自洽看不出来。所以必须在结算框里说出来，不能等到打完小票。
+                ambiguousCount = step.ambiguous.size,
+                onConfirm = { writer, manualTotal, remark ->
+                    viewModel.confirmCheckout(writer, manualTotal, remark)
+                },
+                onDismiss = { viewModel.dismissCheckout() },
+            )
+
+            CheckoutStep.Idle -> Unit
+        }
     }
 }
 @Composable
