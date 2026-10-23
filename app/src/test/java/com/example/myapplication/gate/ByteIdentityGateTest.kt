@@ -256,8 +256,8 @@ class ByteIdentityGateTest {
                 orderUuid = uuidB,
                 writer = OWNER,
                 items = listOf(
-                    OrderLine("6901234567890", "可口可乐330ml", 14, "52.00"),
-                    OrderLine("6909876543210", "雪碧\"大瓶\"\\促销", 3, "13.50"),
+                    OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00"),
+                    OrderLine("6909876543210", "雪碧\"大瓶\"\\促销", 3, "13.50", "1.00"),
                 ),
                 total = "65.50",
                 ts = clock,
@@ -273,7 +273,7 @@ class ByteIdentityGateTest {
             OrderDraft(
                 orderUuid = uuidA,
                 writer = OWNER,
-                items = listOf(OrderLine("6901234567890", "可口可乐330ml", 40, "120.00")),
+                items = listOf(OrderLine("6901234567890", "可口可乐330ml", 40, "120.00", "1.00")),
                 total = "120.00",
                 ts = clock,
                 // 与对端路径同形：`grp` 紧挨在 `remark` 前面，是"remarkOffset 推早了"最先吃掉的字段

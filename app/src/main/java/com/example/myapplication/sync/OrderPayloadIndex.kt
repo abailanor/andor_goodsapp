@@ -213,6 +213,19 @@ object OrderPayloadIndex {
         val name: String,
         val quantity: Int,
         val amountCents: Long,
+        /**
+         * 该行的单个零售价（分）。**null = 文件里没有这一列**（早期写入的订单）。
+         *
+         * ## ⚠ null 时不许拿当前目录价补
+         *
+         * 小票上的「折扣」行 = `Σ(quantity × unitPrice) − Σ amount`。缺 unitPrice 就算不出来，
+         * 那就**不显示这一行**（与"折扣 ≤ 0 不显示"是同一条规则）。
+         *
+         * 拿目录现价去补的话，一张历史小票的金额会随着后来越改越不对 ——
+         * 而顾客手里那张纸是不变的。这种"账对不上"是最难查的一类，
+         * 因为两边各自看都是对的。
+         */
+        val unitPriceCents: Long?,
     )
 
     /**
@@ -362,7 +375,11 @@ object OrderPayloadIndex {
             // 参照实现 `s1client.py` 也不写它。缺失/坏掉一律记 0 —— 于是 `Σitems ≠ total`，
             // [Parsed.manualTotal] 会自动打上标记，不会静默吞掉。
             val amount = o.str("amount")?.let { runCatching { Money.toCents(it) }.getOrNull() } ?: 0L
-            out += Item(barcode, o.str("name").orEmpty(), qty, amount)
+            // `unitPrice` 同样是自己的扩展字段。与 `amount` 的差别是**缺失时不能记 0**：
+            // 0 会被当成"这一行免费"参与折扣计算，于是折扣行凭空多出一笔；
+            // 记 null 则那一行不参与、折扣行不显示（见 Item.unitPriceCents 的注释）。
+            val unitPrice = o.str("unitPrice")?.let { runCatching { Money.toCents(it) }.getOrNull() }
+            out += Item(barcode, o.str("name").orEmpty(), qty, amount, unitPrice)
         }
         return out
     }

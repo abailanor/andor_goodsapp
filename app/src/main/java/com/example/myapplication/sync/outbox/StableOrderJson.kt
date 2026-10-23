@@ -22,10 +22,30 @@ data class OrderLine(
     /** 该条总价，**字符串**（避免 `12.5` / `12.50` 的精度与序列化差异，README §2.3）。 */
     val amount: String,
     /**
-     * 仅在该行单价被**手动改过**时才写。没改就不写，省字节。
-     * 写了之后 `amount` 才可复算（否则价格一变就无法还原当时的单价）。
+     * 该行的**单个零售价**，字符串。
+     *
+     * ## ⚠ 它不是可选装饰，所以声明成非空
+     *
+     * 整箱价 ≠ 箱规 × 单价，所以 `amount` 常常**不等于** `quantity × unitPrice`：
+     * 箱规 24、整箱 80.00、单价 3.50，买 30 个 → 1 箱(80.00) + 6 个(21.00) = `amount` 101.00，
+     * 而 30 × 3.50 = 105.00。差的那 4.00 就是整箱优惠。
+     *
+     * 没有这一列，两件必要的事都做不了：
+     *  - **小票**：印出来"单价 × 数量 ≠ 金额"，而没有任何一行能解释这个差额。
+     *    底部的「折扣」行 = `Σ(quantity × unitPrice) − Σ amount`，缺了它就算不出来；
+     *  - **价格漂移检测**：无法把"价格真的变了"与"有整箱优惠"区分开 ——
+     *    这两种情况在数字上长得一模一样，猜错就会把一张完全正常的单报成"价格已变"。
+     *
+     * 曾经它是可空的（"仅手动改过价时才写，省字节"），代价就是上面两件事都做不了。
+     * 每行多约 22 字节，换来的是可复算 —— 这笔交易划算。
+     *
+     * ## ⚠ 读历史数据时它可能缺失
+     *
+     * `OrderPayloadIndex.Item.unitPriceCents` 仍然是可空的：早期写入镜像的订单没有这一列。
+     * 那种情况下折扣行**不显示**（与"折扣 ≤ 0 就不显示"是同一条规则），
+     * 而**绝不能**拿当前目录价去补 —— 那会让一张历史小票的金额随着后来改价而改变。
      */
-    val unitPrice: String? = null,
+    val unitPrice: String,
     /** A 类订单额外带 `productName`（总部版要显示）；B 类为 null。 */
     val productName: String? = null,
 )
@@ -180,10 +200,10 @@ object StableOrderJson {
             raw(it.quantity.toString())
             raw(",\"amount\":")
             str(it.amount)
-            if (it.unitPrice != null) {
-                raw(",\"unitPrice\":")
-                str(it.unitPrice)
-            }
+            // 每行都写。字段顺序固定（barcode, name, [productName], quantity, amount, unitPrice），
+            // 与 Python 参照实现的 dict 插入顺序逐一对应 —— 顺序差一位，SHA-256 就对不上了。
+            raw(",\"unitPrice\":")
+            str(it.unitPrice)
             raw("}")
         }
         raw("],\"total\":")
@@ -300,9 +320,8 @@ object StableOrderJson {
         n += ByteOps.utf8Len(",\"name\":") + 2 + ByteOps.utf8Len(escape(line.name))
         n += ByteOps.utf8Len(",\"quantity\":") + line.quantity.toString().length
         n += ByteOps.utf8Len(",\"amount\":") + 2 + ByteOps.utf8Len(escape(line.amount))
-        if (line.unitPrice != null) {
-            n += ByteOps.utf8Len(",\"unitPrice\":") + 2 + ByteOps.utf8Len(escape(line.unitPrice))
-        }
+        // unitPrice 现在每行都写（见 OrderLine.unitPrice 的注释），所以这里不再有条件
+        n += ByteOps.utf8Len(",\"unitPrice\":") + 2 + ByteOps.utf8Len(escape(line.unitPrice))
         if (line.productName != null) {
             n += ByteOps.utf8Len(",\"productName\":") + 2 + ByteOps.utf8Len(escape(line.productName))
         }

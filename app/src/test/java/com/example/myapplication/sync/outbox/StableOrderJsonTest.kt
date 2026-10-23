@@ -21,7 +21,7 @@ class StableOrderJsonTest {
 
     private fun draft(
         items: List<OrderLine> = listOf(
-            OrderLine("6901234567890", "可口可乐330ml", 14, "52.00")
+            OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00")
         ),
         remark: String? = null,
         groupId: String? = null,
@@ -92,7 +92,7 @@ class StableOrderJsonTest {
         // 这是最致命的一种输入：文件是一行一个订单，服务端 locateOrderLine 靠扫描 \n 定位边界，
         // 注入一个换行会让该位置之后所有订单的定位全部错乱且不可恢复。
         val s = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("690", "第一行\n第二行", 1, "1.00")))
+            draft(items = listOf(OrderLine("690", "第一行\n第二行", 1, "1.00", "1.00")))
         )
         assertFalse("裸换行必须被转义掉", s.payload.contains(ByteOps.LF))
         // 转义成 \u000a 六字节形式（不用 \n 简写，统一规则更好推理）
@@ -102,7 +102,7 @@ class StableOrderJsonTest {
     @Test
     fun `商品名里的引号与反斜杠被正确转义`() {
         val s = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("690", "可乐\"大瓶\"\\促销", 1, "1.00")))
+            draft(items = listOf(OrderLine("690", "可乐\"大瓶\"\\促销", 1, "1.00", "1.00")))
         )
         assertFalse(ByteOps.containsControlChar(s.payload))
         assertTrue(json(s).contains("\\\"大瓶\\\""))
@@ -121,7 +121,7 @@ class StableOrderJsonTest {
         // 主路径（Jackson 字节偏移）不受影响，但这条测试把风险钉在这里，
         // 提醒任何改动字段顺序的人：不要依赖兜底路径。
         val s = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("690", "status", 1, "1.00")))
+            draft(items = listOf(OrderLine("690", "status", 1, "1.00", "1.00")))
         )
         assertEquals('1', s.payload[s.statusValueByteIndex].toInt().toChar())
         assertTrue(
@@ -134,7 +134,7 @@ class StableOrderJsonTest {
     fun `不做_HTML_转义_尖括号与和号原样保留`() {
         // Gson 默认会把 < > & = ' 转成 \u003c 之类，凭空多出字节、吃掉 20KB 预算
         val s = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("690", "A&B<C>=D'E", 1, "1.00")))
+            draft(items = listOf(OrderLine("690", "A&B<C>=D'E", 1, "1.00", "1.00")))
         )
         assertTrue(json(s).contains("A&B<C>=D'E"))
         assertFalse(json(s).contains("\\u003"))
@@ -180,10 +180,10 @@ class StableOrderJsonTest {
         // 两条订单**只有商品名不同**（条码/数量/金额全一样），
         // 所以 statusValueByteIndex 的差值必须恰好等于两个名字的 UTF-8 字节数之差。
         val ascii = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("6901234567890", "cola", 14, "52.00")))
+            draft(items = listOf(OrderLine("6901234567890", "cola", 14, "52.00", "1.00")))
         )
         val chinese = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("6901234567890", "可口可乐330ml", 14, "52.00")))
+            draft(items = listOf(OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00")))
         )
         assertEquals('1', ascii.payload[ascii.statusValueByteIndex].toInt().toChar())
         assertEquals('1', chinese.payload[chinese.statusValueByteIndex].toInt().toChar())
@@ -201,7 +201,7 @@ class StableOrderJsonTest {
     fun `emoji_商品名也不会让下标错位`() {
         // emoji 是 4 字节 / 2 个 UTF-16 code unit，比汉字更容易算错
         val s = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("690", "可乐🍺装", 1, "1.00")))
+            draft(items = listOf(OrderLine("690", "可乐🍺装", 1, "1.00", "1.00")))
         )
         assertEquals('1', s.payload[s.statusValueByteIndex].toInt().toChar())
         assertEquals(
@@ -306,7 +306,7 @@ class StableOrderJsonTest {
     @Test
     fun `拒绝空_barcode`() {
         try {
-            StableOrderJson.serialize(draft(items = listOf(OrderLine("  ", "x", 1, "1.00"))))
+            StableOrderJson.serialize(draft(items = listOf(OrderLine("  ", "x", 1, "1.00", "1.00"))))
             fail("空 barcode 应当被拒绝")
         } catch (expected: IllegalArgumentException) {
             assertTrue(expected.message!!.contains("barcode"))
@@ -317,7 +317,7 @@ class StableOrderJsonTest {
     fun `拒绝非正整数_quantity`() {
         for (q in listOf(0, -1)) {
             try {
-                StableOrderJson.serialize(draft(items = listOf(OrderLine("690", "x", q, "1.00"))))
+                StableOrderJson.serialize(draft(items = listOf(OrderLine("690", "x", q, "1.00", "1.00"))))
                 fail("quantity=$q 应当被拒绝")
             } catch (expected: IllegalArgumentException) {
                 assertTrue(expected.message!!.contains("quantity"))
@@ -364,7 +364,7 @@ class StableOrderJsonTest {
 
     @Test
     fun `estimateItemBytes_等于实际增量`() {
-        val line = OrderLine("6901234567890", "可口可乐330ml", 14, "52.00")
+        val line = OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00")
         val one = StableOrderJson.serialize(draft(items = listOf(line)))
         val two = StableOrderJson.serialize(draft(items = listOf(line, line)))
         // 多一条 item 只多它自己 + 一个逗号，estimateItemBytes 里已经把逗号算进去了
@@ -372,17 +372,20 @@ class StableOrderJsonTest {
     }
 
     @Test
-    fun `estimateItemBytes_覆盖可选字段`() {
-        val base = OrderLine("690", "可乐", 1, "1.00")
-        val withUnit = base.copy(unitPrice = "3.50")
+    fun `estimateItemBytes_覆盖_unitPrice_长度与可选的_productName`() {
+        val base = OrderLine("690", "可乐", 1, "1.00", "1.00")
+        // ⚠ unitPrice 现在是**必填**的，但它的**长度**仍然影响字节数，所以估算器必须算上它。
+        // 用 "1234.50" 而不是 "3.50"：后者与 "1.00" 同为 4 字节，
+        // 断言 `>` 会失败，而失败的原因看起来像估算器漏了这个字段 —— 实际只是长度没变。
+        val longerUnit = base.copy(unitPrice = "1234.50")
         val withProductName = base.copy(productName = "可口可乐330ml")
-        assertTrue(StableOrderJson.estimateItemBytes(withUnit) > StableOrderJson.estimateItemBytes(base))
+        assertTrue(StableOrderJson.estimateItemBytes(longerUnit) > StableOrderJson.estimateItemBytes(base))
         assertTrue(StableOrderJson.estimateItemBytes(withProductName) > StableOrderJson.estimateItemBytes(base))
 
         val baseOnly = StableOrderJson.serialize(draft(items = listOf(base))).byteSize
         assertEquals(
-            StableOrderJson.serialize(draft(items = listOf(base, withUnit))).byteSize - baseOnly,
-            StableOrderJson.estimateItemBytes(withUnit)
+            StableOrderJson.serialize(draft(items = listOf(base, longerUnit))).byteSize - baseOnly,
+            StableOrderJson.estimateItemBytes(longerUnit)
         )
         assertEquals(
             StableOrderJson.serialize(draft(items = listOf(base, withProductName))).byteSize - baseOnly,
@@ -395,22 +398,34 @@ class StableOrderJsonTest {
         // 请求体上限 20KB（spring.codec.max-in-memory-size），超出返回 413。
         // 这条测试的产出是**标定值**：P5 的拆单器要按它设 byteBudget。
         // 结论：拆单阈值必须按序列化后的字节算，按行数算会在长条码/长商品名时翻车。
-        val line = OrderLine("6901234567890", "可口可乐330ml", 14, "52.00")
+        val line = OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00")
         val n100 = StableOrderJson.serialize(draft(items = List(100) { line }))
         val n200 = StableOrderJson.serialize(draft(items = List(200) { line }))
         val n300 = StableOrderJson.serialize(draft(items = List(300) { line }))
         val perItem = (n200.byteSize - n100.byteSize) / 100
 
         assertEquals("估算器必须与实测增量一致", perItem, StableOrderJson.estimateItemBytes(line))
-        assertTrue("每行实测 $perItem 字节，应当落在 80..95", perItem in 80..95)
+
+        // ⚠ 精确钉死，不给区间。加字段的人**必须**看到这条红，然后重新评估
+        // OrderGroupAssembler 的 BYTE_BUDGET —— 给个 80..115 的区间就等于允许悄悄漂移。
+        // 历史值：unitPrice 变成每行必写之前是 86，之后是 105（差 19 = `,"unitPrice":"1.00"`）。
+        assertEquals("每行字节数变了 → 拆单预算要重新标定", 105, perItem)
+
         assertTrue("100 行 = ${n100.byteSize}B，在 20KB 内", n100.byteSize < 20_480)
-        assertTrue("200 行 = ${n200.byteSize}B，仍在 20KB 内", n200.byteSize < 20_480)
+        // ⚠ 这一条在 unitPrice 变成必写之后**翻转了**：200 行以前装得下，现在装不下。
+        // 也就是说 20KB 的预算从约 230 行缩到约 190 行。拆单器不受影响
+        // （它按 estimateItemBytes 实际累加，不硬编码行数），但"一张单最多能开多少行"
+        // 这个用户可感知的上限确实变小了 —— 值得在开单页上提示。
+        assertTrue("200 行 = ${n200.byteSize}B，已超出 20KB → 必须拆单", n200.byteSize > 20_480)
         assertTrue("300 行 = ${n300.byteSize}B，超出 20KB → 必须拆单", n300.byteSize > 20_480)
     }
 
     @Test
     fun `A_类的_150_字节_remark_会吃掉外层预算`() {
-        val line = OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", productName = "可口可乐330ml")
+        val line = OrderLine(
+            "6901234567890", "可口可乐330ml", 14, "52.00",
+            unitPrice = "3.50", productName = "可口可乐330ml",
+        )
         val noRemark = StableOrderJson.serialize(draft(items = List(50) { line })).byteSize
         val withRemark = StableOrderJson.serialize(
             draft(items = List(50) { line }, remark = ByteOps.padRemark("x"))
@@ -428,7 +443,7 @@ class StableOrderJsonTest {
         // 偏移就变了、remarkOffset 全错。所以序列化必须是确定性的。
         val d = draft(
             items = listOf(
-                OrderLine("690", "可乐", 3, "10.50"),
+                OrderLine("690", "可乐", 3, "10.50", "1.00"),
                 OrderLine("691", "雪碧", 1, "3.00", unitPrice = "3.00"),
             ),
             remark = ByteOps.padRemark("备注"),
@@ -478,11 +493,18 @@ class StableOrderJsonTest {
     // ==================== 与 Python 参照实现的字节级交叉验证 ====================
 
     /**
-     * 期望值由 `C:\Users\hhl\Desktop\python\test_all.py` 的 `jstr()` 生成：
-     * ```python
-     * json.dumps(order, ensure_ascii=False, separators=(",", ":"))
+     * 期望值由 `C:\Users\hhl\Desktop\python\test_all.py` 生成：
      * ```
-     * 那份参照实现跑通了 161 条契约断言，所以它的字节形状就是"服务器会原样落盘的形状"。
+     * python test_all.py --fixtures
+     * ```
+     * 它离线路（不连服务端、不连 Redis），打印这两条断言需要的
+     * `byteSize` / `sha256` / `uuidValueByteIndex` / `statusValueByteIndex`。
+     *
+     * ## ⚠ 改了 payload 字段就必须重跑它，不能拿 Kotlin 自己的输出回填
+     *
+     * 这条断言的唯一价值就是"两个**独立**实现产出同一串字节"。
+     * 用被测代码的输出去更新期望值，它就退化成金标准测试（自己跟自己比），
+     * 而手写序列化器的字段顺序、转义、UTF-8 编码任何一处写歪都不会再被发现。
      *
      * 用 SHA-256 而不是内嵌字面量，是为了避开 Kotlin/Python/JSON 三层转义叠加导致的
      * "我以为我在比对同一串字节"的陷阱。
@@ -498,15 +520,15 @@ class StableOrderJsonTest {
     @Test
     fun `序列化结果与_Python_参照实现_jstr_逐字节一致_含中文`() {
         val s = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("6901234567890", "可口可乐330ml", 14, "52.00")))
+            draft(items = listOf(OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "3.50")))
         )
-        assertEquals(224, s.byteSize)
+        assertEquals(243, s.byteSize)
         assertEquals(
-            "ac19a30775cee9f49f15ac51e34cd70c81d14ac0563c8346306c2821a14bec48",
+            "c8f212f4e29b082fb7f03f25c7c9ed7a8cd506dc43d739a39829d55e5230788c",
             sha256(s.payload)
         )
         assertEquals("u 必须是 15：{ + \"order_uuid\": + 开引号", 15, s.uuidValueByteIndex)
-        assertEquals(222, s.statusValueByteIndex)
+        assertEquals(241, s.statusValueByteIndex)
         // 服务端语义：uuidOffset = 行起点(4) + u
         assertEquals(
             uuid,
@@ -520,16 +542,16 @@ class StableOrderJsonTest {
         // 注意 total 也要跟着改成 "1.00"，否则与参照实现的字节数会差 1 —— 这正是
         // 用 SHA-256 做交叉验证的价值：它逼你把每一个字节都对上，而不是"看起来差不多"。
         val s = StableOrderJson.serialize(
-            draft(items = listOf(OrderLine("690", "可乐\"大瓶\"\\促销", 1, "1.00")))
+            draft(items = listOf(OrderLine("690", "可乐\"大瓶\"\\促销", 1, "1.00", "1.00")))
                 .copy(total = "1.00")
         )
-        assertEquals(218, s.byteSize)
+        assertEquals(237, s.byteSize)
         assertEquals(
-            "29dad5123ebeb7c0e01b1f923b7a23dbc325b6a7bd7385c9c5edfa9c9c1f3f48",
+            "ed09894a2dbcf4930786165f6e044afa086f5f4b6555e7813985365b829b4e4e",
             sha256(s.payload)
         )
         assertEquals(15, s.uuidValueByteIndex)
-        assertEquals(216, s.statusValueByteIndex)
+        assertEquals(235, s.statusValueByteIndex)
     }
 
     private fun sha256(b: ByteArray): String =
@@ -541,7 +563,7 @@ class StableOrderJsonTest {
         // 用一个独立的 JSON 解析器验证：转义必须**语义正确**，不只是"没有裸控制字符"。
         // 读不回来就意味着我们写进服务器文件的那一行是坏的 JSON。
         val nasty = "可乐\"大瓶\"\\促销\n第二行\t制表"
-        val s = StableOrderJson.serialize(draft(items = listOf(OrderLine("690", nasty, 1, "1.00"))))
+        val s = StableOrderJson.serialize(draft(items = listOf(OrderLine("690", nasty, 1, "1.00", "1.00"))))
         val root = com.google.gson.JsonParser.parseString(json(s)).asJsonObject
         val item = root.getAsJsonObject("content")
             .getAsJsonArray("items")[0].asJsonObject

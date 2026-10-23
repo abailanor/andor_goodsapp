@@ -2,7 +2,12 @@ package com.example.myapplication.mirror
 
 import com.example.myapplication.core.bytes.ByteOps
 import com.example.myapplication.db.FileStateEntity
+import com.example.myapplication.db.OrderOutboxEntity
+import com.example.myapplication.sync.OrderFileId
 import com.example.myapplication.sync.StatsProjection
+import com.example.myapplication.sync.outbox.OrderGroupAssembler
+import com.example.myapplication.sync.outbox.OrderLine
+import com.example.myapplication.sync.outbox.OutboxStore
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -638,6 +643,153 @@ class RoomMirrorStateStoreTest {
         assertEquals(clock, fs.lastSyncAttemptAt)
         // ⚠ firstSyncedAt 是"同步过但没单"与"从没拉过"的唯一分界，FULL 不该把它冲掉
         assertNull("这个文件此前从未同步过", fs.firstSyncedAt)
+    }
+
+    // ==================== outbox 提升（OUTBOX → FILE: 搬桶） ====================
+    //
+    // 这一段测的是**两个 store 的交接**：`OutboxStore` 管未同步区，`RoomMirrorStateStore`
+    // 管已同步区，而搬桶只有后者能做（理由见 `promoteFromOutbox` 的注释：三条来路都经过它）。
+    //
+    // 所以这里用**真的** `OutboxStore` 播种，不是手搓一个 outbox 行 ——
+    // 手搓的话"加"与"减"就不是同一个函数算出来的，净值为零这条断言会失去意义。
+
+    /** 与 [store] 共享同一个 [dao]、同一个时钟与时区，正如生产环境。 */
+    private val outbox = OutboxStore(
+        dao = dao,
+        inTransaction = { body -> body() },
+        timeZone = { utc },
+        now = { clock },
+        uuidFactory = { uuid1 },
+        audit = { audits += it },
+    )
+
+    /** 与 [order] 的默认值同源：alice / 2026-09-15 / 52.00 / 14 件。两边必须算出同一个 dimKey。 */
+    private fun outboxReq() = OrderGroupAssembler.Request(
+        fileType = OrderFileId.TYPE_B,
+        year = 2026,
+        month = 9,
+        writer = "alice",
+        lines = listOf(OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00")),
+        ts = sept15,
+    )
+
+    private suspend fun seedOutbox() {
+        outbox.enqueue(storeKey, "alice", outboxReq())
+    }
+
+    /** DRAFT 只能手搓：`enqueue` 只会写 READY 或 BLOCKED，草稿生命周期属 P7。 */
+    private suspend fun seedDraft(uuid: String = uuid1) {
+        dao.insertOutbox(
+            OrderOutboxEntity(
+                storeKey = storeKey, orderUuid = uuid, groupId = "",
+                fileType = OrderFileId.TYPE_B, year = 2026, month = 9,
+                payload = ByteOps.utf8(order(uuid = uuid)),
+                state = OrderOutboxEntity.DRAFT,
+                blockedReason = null, blockedBarcodes = null,
+                attemptCount = 0, lastError = null,
+                pricedAt = clock, createdAt = clock,
+                writer = "alice", totalCents = 5200, itemCount = 1, orderTs = sept15,
+            )
+        )
+    }
+
+    private fun outboxAmount(metric: String = StatsProjection.METRIC_AMOUNT) =
+        dao.contribTotal(storeKey, StatsProjection.OUTBOX_SCOPE, metric)
+
+    @Test
+    fun `ADD_命中本地_outbox_行时翻_PROMOTED_并把贡献从_OUTBOX_搬进_FILE_桶`() = runBlocking {
+        seedOutbox()
+        assertEquals(5200L, outboxAmount())
+        assertEquals(14L, outboxAmount(StatsProjection.METRIC_PIECES))
+
+        // 三条来路之一（`/add` 响应、SSE 回声、FULL）把这一单带回了镜像
+        store.commit(addedRecord(order()))
+
+        assertEquals(OrderOutboxEntity.PROMOTED, dao.outboxState(storeKey, uuid1))
+        // **净值为零**是加减对称的唯一可观测判据：差一分钱不会报错，只会让营业额永久偏掉
+        assertEquals(0L, outboxAmount())
+        assertEquals(0L, outboxAmount(StatsProjection.METRIC_ORDERS))
+        assertEquals(0L, outboxAmount(StatsProjection.METRIC_PIECES))
+        assertEquals(5200L, amount())
+        assertEquals(1L, amount(StatsProjection.METRIC_ORDERS))
+        assertEquals(14L, amount(StatsProjection.METRIC_PIECES))
+    }
+
+    @Test
+    fun `ADD_是别的设备开的单时_outbox_与_OUTBOX_桶都不动`() = runBlocking {
+        seedOutbox()   // 本机 outbox 里是 uuid1
+
+        // 镜像里回来的是 uuid2：另一台设备开的单，与本机 outbox 无关
+        store.commit(addedRecord(order(uuid = uuid2, writer = "bob", total = "30.00", qty = 3)))
+
+        assertEquals(OrderOutboxEntity.READY, dao.outboxState(storeKey, uuid1))
+        // alice 那笔还在未同步区：钱在 OUTBOX 桶，`FILE:` 桶里一分都没有
+        assertEquals(5200L, outboxAmount())
+        assertEquals(0L, amount())
+        // bob 的那一笔落在自己的 dimKey 上，且只进 `FILE:` 桶
+        assertEquals(3000L, amount(key = StatsProjection.dayKey("bob", sept15, utc)))
+        assertEquals(0L, dao.contribValue(storeKey, StatsProjection.OUTBOX_SCOPE,
+            StatsProjection.dayKey("bob", sept15, utc), StatsProjection.METRIC_AMOUNT))
+    }
+
+    @Test
+    fun `同一笔_ADD_重复投递不会把_OUTBOX_桶减两次`() = runBlocking {
+        seedOutbox()
+        store.commit(addedRecord(order()))
+        assertEquals(0L, outboxAmount())
+
+        // SSE 回声与 HTTP 响应会把同一条消息投递两次
+        store.commit(addedRecord(order(), alreadyApplied = true))
+        store.commit(addedRecord(order()))
+
+        // 减两次会得到 -5200：营业额少一笔，而且少在哪一天、哪个人名下都查不出来
+        assertEquals(0L, outboxAmount())
+        assertEquals(5200L, amount())
+        assertEquals(OrderOutboxEntity.PROMOTED, dao.outboxState(storeKey, uuid1))
+    }
+
+    @Test
+    fun `commitFull_也提升_outbox_里未上传的行`() = runBlocking {
+        // 上传超时但服务器收下了 → 行留在 IN_FLIGHT → 之后任何一次 FULL 都会在镜像里扫到它。
+        // 不在这里搬桶的话，那笔钱会永久留在 OUTBOX 桶，而它已经在 FILE: 桶里被算过一遍了。
+        seedOutbox()
+        // 模拟"已经发出 /add、结果未知"：write-ahead 把行留在了 IN_FLIGHT
+        assertNotNull(outbox.takeOff(storeKey, uuid1))
+        assertEquals(5200L, outboxAmount())
+
+        val m = mirrorWith(order())
+        store.commitFull(storeKey, fileId, fullState(7, m), m)
+
+        assertEquals(OrderOutboxEntity.PROMOTED, dao.outboxState(storeKey, uuid1))
+        assertEquals(0L, outboxAmount())
+        assertEquals(5200L, amount())
+    }
+
+    @Test
+    fun `commitFull_不会把已_PROMOTED_的行再减一次`() = runBlocking {
+        seedOutbox()
+        store.commit(addedRecord(order()))
+        assertEquals(0L, outboxAmount())
+
+        val m = mirrorWith(order())
+        store.commitFull(storeKey, fileId, fullState(7, m), m)
+
+        assertEquals(0L, outboxAmount())
+        assertEquals(5200L, amount())
+    }
+
+    @Test
+    fun `DRAFT_行不被提升_也不被减贡献`() = runBlocking {
+        // `markOutboxPromoted` 的 SQL 带 `state NOT IN ('DRAFT','PROMOTED')`：
+        // DRAFT 从来没被加进 OUTBOX 桶，所以也不能被减掉。
+        seedDraft()
+        assertEquals(0L, outboxAmount())
+
+        store.commit(addedRecord(order()))
+
+        assertEquals(OrderOutboxEntity.DRAFT, dao.outboxState(storeKey, uuid1))
+        assertEquals(0L, outboxAmount())
+        assertEquals(5200L, amount())
     }
 
     // ==================== DIVERGED ====================

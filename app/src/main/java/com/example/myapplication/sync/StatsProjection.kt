@@ -123,6 +123,23 @@ object StatsProjection {
         "${dateKey(epochMillis, timeZone)}|$WRITER_DIM_PREFIX$writer"
 
     /**
+     * [dayKey] 的逆运算：取出日期段。
+     *
+     * ⚠ 故意**不做**长度与格式校验。dimKey 只可能由 [dayKey] 产出，
+     * 真走到 `StringIndexOutOfBoundsException` 就说明库里的数据被别的代码写坏了 ——
+     * 那种情况要炸出来；静默返回空串只会让统计少一块，而少在哪一天、哪个人名下查不出来。
+     */
+    fun dateOf(dimKey: String): String = dimKey.substring(0, DATE_WIDTH)
+
+    /**
+     * [dayKey] 的逆运算：取出 writer。
+     *
+     * 起点用 [WRITER_SQL_FROM] 减 1（那个常量是 SQL 的 1-based `substr` 起点），
+     * 这样 Kotlin 侧与 SQL 侧永远只差同一个常数，不会各自算错一位。
+     */
+    fun writerOf(dimKey: String): String = dimKey.substring(WRITER_SQL_FROM - 1)
+
+    /**
      * 一笔订单对统计的贡献。**A 类返回空列表。**
      *
      * ## 为什么这里不收 `status` 参数

@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import kotlinx.coroutines.flow.Flow
 
 /**
  * 订单文件镜像的存储层：`file_state` + `order_index` + `order_item_index` + `stats_contrib`
@@ -355,7 +356,9 @@ interface OrderFileDao {
     // `payload` 是"将要原样发给服务端的那些字节"。它一旦被改，
     // ①已经发出去的那份与库里这份就不是同一个订单了（偏移全错），
     // ②而等长覆写不报错、校验和自洽、WAL 忠实回放 —— 没有任何机制会发现。
-    // "用新价重算"因此是**删旧行 + 插新行（新 uuid）**，见 `OutboxStore.reprice`。
+    // "用新价重算"因此是**删旧行 + 插新行（新 uuid）**：
+    // `OutboxStore.enqueue(replacing = 旧uuid)`。⚠ 不要再加一个叫 `reprice` 的方法，
+    // 理由见 `OrderOutboxEntity` 的类注释（会变成第二个能搬 OUTBOX 桶的入口）。
     //
     // ## ⚠ 状态字面量在这里是硬编码的
     //
@@ -761,7 +764,109 @@ interface OrderFileDao {
         """
     )
     suspend fun statsSelfCheck(storeKey: String): List<StatsMismatch>
+
+    // ==================== UI 读取 ====================
+    //
+    // 上面那些查询全是给**同步机器**用的按主键点查。下面两条是给界面用的，
+    // 返回 `Flow` 而不是 `suspend`：同步随时可能在后台落地一笔新订单，
+    // 列表必须自己跟上。用 suspend 的话每次同步完都得有人记得去刷一次，
+    // 忘了就是"明明上传成功了，列表里还挂在未上传那一栏"。
+
+    /**
+     * 已同步区（镜像里）的订单，按下单时间倒序。
+     *
+     * @param writer null = 不按人筛。传了就只返回这个店员开的单。
+     * @param limit  上限。**必须给**：一个店几年下来能有几万笔，
+     *               一次全读进内存再让 Compose 摆列表是会 OOM 的。
+     *
+     * ⚠ 只用得上 `(storeKey, …)` 这段索引前缀：现有两个索引是
+     * `(storeKey, writer, orderTs)` 与 `(storeKey, fileId, orderTs)`，
+     * 都没有"只按 storeKey + orderTs 范围"的形状，传了 [writer] 才走得上第一个。
+     * 用户规模（一天上百单）下全店扫描可以接受；订单量再上一个数量级就要补
+     * `(storeKey, orderTs)` 索引 —— 那是 Room v5 的事。
+     */
+    @Query(
+        """
+        SELECT * FROM order_index
+        WHERE storeKey = :storeKey
+          AND orderTs >= :fromTs AND orderTs < :toTs
+          AND (:writer IS NULL OR writer = :writer)
+        ORDER BY orderTs DESC
+        LIMIT :limit
+        """
+    )
+    fun observeOrderIndexInRange(
+        storeKey: String,
+        fromTs: Long,
+        toTs: Long,
+        writer: String?,
+        limit: Int,
+    ): Flow<List<OrderIndexEntity>>
+
+    /**
+     * 全部文件游标，响应式版本。统计页用它算那个 `*`（哪些月份本地数据不完整）。
+     *
+     * 与 [allFileStates] 的区别只是返回 `Flow`：同步落地后 `firstSyncedAt` 会从 null 变成时间戳，
+     * 而 `*` 必须当场消失 —— 用户做完一次全量同步还看到星号，会以为同步没生效。
+     */
+    @Query("SELECT * FROM file_state WHERE storeKey = :storeKey ORDER BY fileType, year, month")
+    fun observeFileStates(storeKey: String): Flow<List<FileStateEntity>>
+
+    /**
+     * 未上传的订单（[observeOrderIndexInRange] 的另一半），响应式版本。
+     *
+     * 排除 `PROMOTED`：那些行**保留不删**（是"这个 uuid 已上传"的唯一凭据），
+     * 但它们对应的订单已经在 `order_index` 里了 —— 两边都列出来就是同一笔单显示两遍。
+     *
+     * `DRAFT` 也在这里返回，由调用方决定要不要显示：草稿连"成交了吗"都没确定，
+     * 混进"未上传"列表会让用户以为有一笔钱没上去。
+     */
+    @Query(
+        """
+        SELECT * FROM order_outbox
+        WHERE storeKey = :storeKey AND state != 'PROMOTED'
+        ORDER BY createdAt
+        """
+    )
+    fun observeOutboxPending(storeKey: String): Flow<List<OrderOutboxEntity>>
+
+    /**
+     * 按 `dimKey`（`<yyyy-MM-dd>|w:<writer>`）与 `metric` 聚合的贡献合计。
+     *
+     * ## 为什么用 `substr(dimKey, 1, 10)` 裁区间
+     *
+     * `dimKey` 的日期部分是**恒宽**的（`%04d-%02d-%02d`，见 `StatsProjection.dateKey`），
+     * 所以字典序 `BETWEEN` 与日期序等价。拆一列出来要改 schema + 迁移，
+     * 而收益只是让这条查询能走索引 —— 现在它靠主键的 `storeKey` 前缀过滤，
+     * 一个店的贡献行是"天数 × 店员数 × 3 个指标"，量级几千行，全扫可以接受。
+     *
+     * ## 不筛 `scope`，也**不排除** `frozen`
+     *
+     * `FILE:<fileId>`（已同步）与 `OUTBOX`（未上传）都要算进营业额：
+     * 未上传的单货已经给客人了，不算的话用户开完单看统计没变，以为丢单。
+     * 归档月份同理 —— 归档只是"不再同步"，不是"不再统计"。
+     *
+     * ⚠ 这与 FULL 重投影路径的 `WHERE frozen = 0` 不矛盾：
+     * 那边是"不要覆盖已冻结的行"，这边是"冻结的钱仍然是钱"。
+     */
+    @Query(
+        """
+        SELECT dimKey AS dimKey, metric AS metric, SUM(value) AS total
+        FROM stats_contrib
+        WHERE storeKey = :storeKey
+          AND substr(dimKey, 1, 10) BETWEEN :fromDate AND :toDate
+        GROUP BY dimKey, metric
+        """
+    )
+    fun observeContribInRange(storeKey: String, fromDate: String, toDate: String): Flow<List<ContribAggregate>>
 }
+
+/** [OrderFileDao.observeContribInRange] 的一行。`SUM()` 分组后每组至少有一行，不可能为 NULL。 */
+data class ContribAggregate(
+    val dimKey: String,
+    val metric: String,
+    val total: Long,
+)
 
 /** [OrderFileDao.statsSelfCheck] 的一行差值。 */
 data class StatsMismatch(

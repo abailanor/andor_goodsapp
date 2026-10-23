@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.ui.draw.clip
@@ -136,11 +135,8 @@ fun OrderScreen(
                             },
                             enabled = orderItems.isNotEmpty()
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Save,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
+                            // ⚠ 这里**不要**加图标：这一栏（清空/保存/打印）在窄屏上已经排满了，
+                            // 一个 18dp 的图标 + 间距就会把"打印"挤到第二行或截断文字。
                             Text("保存")
                         }
                         Button(

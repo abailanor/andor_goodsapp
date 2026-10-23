@@ -26,6 +26,11 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         locator = ServiceLocator(this)
+        // 只是 launch 一个 collector，不阻塞：Room 的打开发生在 appScope 的后台线程上。
+        // 必须在这里启动而不是等某个页面第一次用到 —— [ServiceLocator.currentOwnerName]
+        // 在登出状态下要靠这份 store_meta 副本才能拼出正确的 fileId，
+        // 晚启动就会有一段时间退回 `__local__`，那期间开的单会落进一个只有本机知道的文件。
+        locator.startWatchers()
     }
 
     companion object {

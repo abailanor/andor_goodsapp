@@ -6,6 +6,7 @@ import com.example.myapplication.net.ApiError
 import com.example.myapplication.net.OrderFileApi
 import com.example.myapplication.net.Service1Api
 import com.example.myapplication.net.UnauthorizedReason
+import com.example.myapplication.net.dto.OrderAddResultDto
 import com.example.myapplication.net.dto.OrderSyncRequestDto
 import kotlinx.coroutines.runBlocking
 import okio.Buffer
@@ -664,6 +665,14 @@ class MirrorVerifierTest {
             month: Int?,
             onFull: suspend (Service1Api.FullFileBody) -> Unit,
         ): Service1Api.SyncOutcome = throw AssertionError("校验发的是 version=0，不该走到 409 探测")
+
+        /** 校验是只读动作，绝不上传订单。 */
+        override suspend fun addOrder(
+            type: String,
+            year: Int,
+            month: Int?,
+            payloadJson: String,
+        ): OrderAddResultDto = throw AssertionError("校验绝不许上传订单：addOrder($type/$year/$month)")
     }
 
     /**

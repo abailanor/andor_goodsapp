@@ -63,7 +63,7 @@ class OrderPayloadIndexTest {
                 orderUuid = uuid,
                 writer = "alice",
                 items = listOf(
-                    OrderLine("6901234567890", "可口可乐330ml", 14, "52.00"),
+                    OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00"),
                     OrderLine(
                         barcode = "6900000000017",
                         name = "百事可乐🥤大瓶",
@@ -110,7 +110,7 @@ class OrderPayloadIndexTest {
         val s = StableOrderJson.serialize(
             OrderDraft(
                 orderUuid = uuid, writer = "alice",
-                items = listOf(OrderLine("6901234567890", "可乐", 1, "3.00")),
+                items = listOf(OrderLine("6901234567890", "可乐", 1, "3.00", "1.00")),
                 total = "3.00", ts = 1L, remark = remark,
             )
         )
@@ -134,7 +134,7 @@ class OrderPayloadIndexTest {
         val s = StableOrderJson.serialize(
             OrderDraft(
                 orderUuid = uuid, writer = "张三",
-                items = listOf(OrderLine("6901234567890", "可口可乐330ml🥤", 14, "52.00")),
+                items = listOf(OrderLine("6901234567890", "可口可乐330ml🥤", 14, "52.00", "1.00")),
                 total = "52.00", ts = 1L,
             )
         )
@@ -276,8 +276,8 @@ class OrderPayloadIndexTest {
             OrderDraft(
                 orderUuid = uuid, writer = "张三",
                 items = listOf(
-                    OrderLine("6901234567890", "可口可乐330ml", 14, "52.00"),
-                    OrderLine("6900000000017", "百事可乐", 3, "9.00"),
+                    OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00"),
+                    OrderLine("6900000000017", "百事可乐", 3, "9.00", "1.00"),
                 ),
                 total = "61.00", ts = 1_758_000_000_000L, status = 1,
                 groupId = "a3f9c21b", remark = ByteOps.padRemark("整箱补货  "),

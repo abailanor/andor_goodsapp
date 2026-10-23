@@ -41,8 +41,9 @@ class AdminLoginRequestDto(
  * `LoginResponse`（商户端登录，店主 / 员工 / ADMIN 都走这个）。
  *
  * 字段的坑：
- *  - `level` = `OWNER` / `EMPLOYEE` / `ADMIN`。**它决定镜像路径的归属者**，
- *    员工操作的是**店主的**文件，所以 `ownerName` 不能拿 `username` 顶。
+ *  - `level` 实际取值是 `OWNER` / `A` / `B` / `ADMIN`（`A`/`B` 是员工的两档，
+ *    来自 `EmployeeInfo.getLevel()`，**不是** "EMPLOYEE" 这个字面量）。
+ *    它决定 [fileOwnerOrNull] 能不能退回 `username`。
  *  - `createdAt` = **0 表示未知**（README §4.1）。0 不是"1970 年成立"，
  *    拿它当枚举下界会一路枚举到 1970 打爆服务端，必须有 `epochFloor` + 硬下界。
  *  - `previousLoginAt` = 0 表示从未登录过。与本地存的 `currentLoginAt` 不等
@@ -61,9 +62,50 @@ class LoginResponseDto(
     val sessionId: String?,
     val previousLoginAt: Long?,
     val currentLoginAt: Long?,
+    /**
+     * **订单文件的归属者**（店主用户名）= 服务端 `OrderFileService.resolveFileOwner` 的返回值。
+     *
+     * 店主登录时它等于 [username]；**员工登录时不等于**——员工的订单文件归属店主
+     * （`A:<ownerName>:<年>` / `B:<ownerName>:<年>-<月>`）。
+     *
+     * ⚠ 可能为 null：老版本服务端没有这个字段。此时**只有店主登录是安全的**，
+     * 见 [fileOwnerOrNull]。
+     */
+    val ownerName: String?,
 ) {
     /** 权限名集合。按**名字**判断，不按序号 —— 服务端可能插入新权限。 */
     fun permSet(): Set<String> = perms.orEmpty().filterNotNull().toSet()
+
+    /**
+     * 可以安全用于拼 fileId 与镜像路径的归属者名。**null = 无法确定，禁止继续登录。**
+     *
+     * ## ⚠ 为什么不写成 `ownerName ?: username`
+     *
+     * 那正是 P0 期间真实造成过一次镜像路径错误的混淆。员工登录时拿 `username` 顶，
+     * 订单就会落进 `B:<员工名>:<年>-<月>` 这个服务器上并不存在的文件 ——
+     * 而它**照样能同步**（服务端 `ensureFileBlocking` 按需建文件），
+     * 于是那些订单只有这一台设备看得到，同店其它设备永远同步不到，两边都不报错。
+     *
+     * 退回 `username` 只在 `level` 不是 `A`/`B` 时才与服务端等价：
+     * `resolveFileOwner`（`OrderFileService:180-182`）对非 A/B 的 level 直接 `return username`。
+     * 所以这个 fallback 是**照着服务端那一个分支抄的**，不是猜的，
+     * 唯一用途是兼容"还没升级、不返回 ownerName"的老服务端上的店主登录。
+     *
+     * @return null 时上层必须报"服务端版本过旧，无法确定订单文件归属"并拒绝登录，
+     *         **绝不能**找个别的值顶上。
+     */
+    fun fileOwnerOrNull(): String? =
+        ownerName?.takeIf { it.isNotBlank() }
+            ?: username?.takeIf { it.isNotBlank() && level != LEVEL_A && level != LEVEL_B }
+
+    companion object {
+        /**
+         * 员工的两档。服务端 `resolveFileOwner` 只认这两个字面量
+         * （`"A".equals(level) || "B".equals(level)`），其余一律当店主处理。
+         */
+        const val LEVEL_A = "A"
+        const val LEVEL_B = "B"
+    }
 }
 
 /**

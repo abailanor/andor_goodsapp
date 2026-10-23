@@ -116,7 +116,7 @@ class MirrorCommitterTest {
         orderUuid = uuid,
         writer = "alice",
         items = listOf(
-            OrderLine(barcode = "6901234567890", name = name, quantity = qty, amount = "52.00")
+            OrderLine(barcode = "6901234567890", name = name, quantity = qty, amount = "52.00", "1.00")
         ),
         total = "52.00",
         ts = 1_758_000_000_000L,
@@ -502,7 +502,12 @@ class MirrorCommitterTest {
         val remark = ByteOps.padRemark("尽快发货，谢谢老板")
         val d = OrderDraft(
             orderUuid = uuid1, writer = "alice",
-            items = listOf(OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", productName = "可口可乐330ml")),
+            items = listOf(
+                OrderLine(
+                    "6901234567890", "可口可乐330ml", 14, "52.00",
+                    unitPrice = "3.50", productName = "可口可乐330ml",
+                )
+            ),
             total = "52.00", ts = now, remark = remark,
         )
         val s = StableOrderJson.serialize(d)

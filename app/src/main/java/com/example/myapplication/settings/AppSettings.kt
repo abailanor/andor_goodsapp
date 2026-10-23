@@ -119,6 +119,31 @@ data class AppSettings(
     /** 用户**显式打开**的事件（覆盖 `defaultEnabled = false` 的那些）。 */
     val notifyEnabledOverrides: Set<NotifyEvent> = emptySet(),
 
+    // ==================== 登录 ====================
+
+    /**
+     * 冷启动时怎么处理登录。默认 [LoginMode.ASK]，也就是**只在第一次启动时问**。
+     *
+     * 用户的选择必须沿用（"首次选择登录或离线，下一次就沿用上一次的选择"），
+     * 所以它得持久化：每次启动都弹一遍登录页，用户第三次就会烦，
+     * 而"离线也能完整使用"是这个 App 的设计前提，不该被一个登录框挡住。
+     */
+    val loginMode: LoginMode = LoginMode.ASK,
+
+    /**
+     * 上一次活动的店铺（merchantCode）。空串 = 这台设备从没成功登录过。
+     *
+     * ## 为什么必须持久化
+     *
+     * 登出**不切回** `__local__`（作用域停在原店铺，见 `ServiceLocator.setSession`），
+     * 所以冷启动时必须知道该把作用域恢复到哪一家店 —— 否则界面上是 `__local__` 的空数据，
+     * 而用户明明昨天还在正常用。
+     *
+     * ⚠ 不能靠 `store_meta` 反推：那张表可能有多行（这台设备登录过好几家店），
+     * `ORDER BY adoptedAt DESC` 给出的是"最早被收养的那家"，不是"最后用的那家"。
+     */
+    val lastStoreKey: String = "",
+
     // ==================== 后台 ====================
 
     /**
@@ -330,6 +355,39 @@ enum class BackgroundMode {
 
     /** `dataSync` 前台服务 + 常驻通知。 */
     PERSISTENT_SERVICE,
+}
+
+/**
+ * 冷启动时的登录策略。
+ *
+ * 状态迁移只有三条，都是单向的（除了用户在设置里显式改）：
+ * ```
+ * ASK ──用户选"离线"──→ OFFLINE
+ * ASK ──登录成功────→ AUTO
+ * OFFLINE ──之后登录成功──→ AUTO      （"先离线用一段时间再登录，之后都自动登录"）
+ * ```
+ */
+enum class LoginMode {
+    /** 还没选过。启动时显示"登录 / 继续离线使用"两个入口。 */
+    ASK,
+
+    /**
+     * 用户选过离线，之后启动**不再问**，直接进离线模式。
+     *
+     * 想登录随时可以从设置里进 —— 离线是可用的完整形态，不是残废状态，
+     * 所以不该每次启动都拿登录框拦一道。
+     */
+    OFFLINE,
+
+    /**
+     * 登录成功过，之后启动**静默自动登录**（用 [com.example.myapplication.security.CredentialStore]
+     * 里存的凭据）。失败就降级成离线继续用，**不弹框挡住用户**。
+     *
+     * ⚠ 自动重登的四条约束见 `ApiErrorClassifier.mayAutoRelogin` 的注释：
+     * 全局串行、间隔 ≥12 秒、一次会话最多一次、收到过 SSE `KICKED` 就永久闩死。
+     * 单会话策略下无脑自动重登会和新登录方互相踢，形成风暴。
+     */
+    AUTO,
 }
 
 /**

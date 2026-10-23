@@ -141,6 +141,12 @@ class SettingsStoreTest {
             freqWindow = FreqWindow.FIVE_MINUTES,
             notifyDisabledOverrides = setOf(NotifyEvent.KICKED, NotifyEvent.PRODUCT_DELETED),
             notifyEnabledOverrides = setOf(NotifyEvent.NEW_ORDER),
+            // ⚠ 必须设成**非默认值**：这条断言是整对象比较，
+            // 而 loginMode 的默认值恰好是 ASK。留成默认的话，
+            // 就算 writeAll 漏了这一项，读回来也是 ASK，测试照样绿 ——
+            // 而"首次选择登录/离线要沿用"这条需求全靠它真的落盘。
+            loginMode = LoginMode.AUTO,
+            lastStoreKey = "00002",
             backgroundMode = BackgroundMode.PERSISTENT_SERVICE,
             printBarcode = false,
             printShopName = "丽华金龙",

@@ -11,6 +11,7 @@ import com.example.myapplication.net.ApiError
 import com.example.myapplication.net.OrderFileApi
 import com.example.myapplication.net.Service1Api
 import com.example.myapplication.net.UnauthorizedReason
+import com.example.myapplication.net.dto.OrderAddResultDto
 import com.example.myapplication.net.dto.OrderStreamFields
 import com.example.myapplication.net.dto.OrderStreamMessageDto
 import com.example.myapplication.net.dto.OrderSyncRequestDto
@@ -115,7 +116,12 @@ class OrderFileSyncEngineTest {
     private fun draft(uuid: String) = OrderDraft(
         orderUuid = uuid,
         writer = "alice",
-        items = listOf(OrderLine(barcode = "6901234567890", name = "可口可乐330ml", quantity = 14, amount = "52.00")),
+        items = listOf(
+            OrderLine(
+                barcode = "6901234567890", name = "可口可乐330ml",
+                quantity = 14, amount = "52.00", unitPrice = "3.50",
+            )
+        ),
         total = "52.00",
         ts = sept15,
     )
@@ -261,6 +267,18 @@ class OrderFileSyncEngineTest {
             probes += Triple(type, year, month)
             return serve(onFull)
         }
+
+        /**
+         * 同步引擎**从不**上传订单 —— 那是 `OutboxUploader` 的事。
+         * 抛而不是返回默认值，理由与"脚本用完就抛"完全一样：
+         * 默默返回一个 `OrderAddResultDto` 会让"引擎跑错了路径"这种 bug 绿着通过。
+         */
+        override suspend fun addOrder(
+            type: String,
+            year: Int,
+            month: Int?,
+            payloadJson: String,
+        ): OrderAddResultDto = throw AssertionError("同步引擎不该调 /add")
 
         private suspend fun serve(
             onFull: suspend (Service1Api.FullFileBody) -> Unit,

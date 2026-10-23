@@ -1,5 +1,6 @@
 package com.example.myapplication.mirror
 
+import com.example.myapplication.db.ContribAggregate
 import com.example.myapplication.db.FileStateEntity
 import com.example.myapplication.db.OrderFileDao
 import com.example.myapplication.db.OrderGroupEntity
@@ -10,6 +11,9 @@ import com.example.myapplication.db.OutboxGroupSummary
 import com.example.myapplication.db.StatsAggEntity
 import com.example.myapplication.db.StatsContribEntity
 import com.example.myapplication.db.StatsMismatch
+import com.example.myapplication.sync.StatsProjection
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 /**
  * [OrderFileDao] 的内存实现，给 [RoomMirrorStateStoreTest] 用。
@@ -472,5 +476,56 @@ internal class FakeOrderFileDao : OrderFileDao {
             val a = agg[Triple(storeKey, k.first, k.second)]?.value ?: 0L
             if (sum == a) null else StatsMismatch(k.first, k.second, sum, a)
         }
+    }
+
+    // ==================== UI 读取 ====================
+    //
+    // 真 Room 的这几个方法返回**热** Flow（表一变就重发）。这里用一次性的 `flow { emit(...) }`
+    // 就够：用它的测试断言的是"过滤 / 排序 / 聚合的语义对不对"，不是"变了会不会重发"——
+    // 后者是 Room 失效跟踪器的职责，替身去模仿它没有意义。
+
+    override fun observeFileStates(storeKey: String): Flow<List<FileStateEntity>> = flow {
+        emit(allFileStates(storeKey))
+    }
+
+    override fun observeOrderIndexInRange(
+        storeKey: String,
+        fromTs: Long,
+        toTs: Long,
+        writer: String?,
+        limit: Int,
+    ): Flow<List<OrderIndexEntity>> = flow {
+        emit(
+            orders.values
+                .filter {
+                    it.storeKey == storeKey && it.orderTs >= fromTs && it.orderTs < toTs &&
+                        (writer == null || it.writer == writer)
+                }
+                .sortedByDescending { it.orderTs }
+                .take(limit)
+        )
+    }
+
+    override fun observeOutboxPending(storeKey: String): Flow<List<OrderOutboxEntity>> = flow {
+        emit(outboxPending(storeKey))
+    }
+
+    override fun observeContribInRange(
+        storeKey: String,
+        fromDate: String,
+        toDate: String,
+    ): Flow<List<ContribAggregate>> = flow {
+        // ⚠ 与 SQL 保持一致的两点：**不筛 scope**（OUTBOX 与 FILE: 都算进营业额 —— 未上传的单
+        // 货已经给客人了，不算的话用户开完单看统计没变，以为丢单），
+        // 也**不排除 frozen**（归档只是"不再同步"，不是"不再统计"）。
+        emit(
+            contrib.values
+                .filter {
+                    it.storeKey == storeKey &&
+                        it.dimKey.take(StatsProjection.DATE_WIDTH) in fromDate..toDate
+                }
+                .groupBy { it.dimKey to it.metric }
+                .map { (k, rows) -> ContribAggregate(k.first, k.second, rows.sumOf { it.value }) }
+        )
     }
 }

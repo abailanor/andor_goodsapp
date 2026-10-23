@@ -173,6 +173,8 @@ class SettingsStore(private val ds: DataStore<Preferences>) {
             freqWindow = p.enumOr(Keys.FREQ_WINDOW, s.freqWindow),
             notifyDisabledOverrides = p.eventSet(Keys.NOTIFY_DISABLED),
             notifyEnabledOverrides = p.eventSet(Keys.NOTIFY_ENABLED),
+            loginMode = p.enumOr(Keys.LOGIN_MODE, s.loginMode),
+            lastStoreKey = p[Keys.LAST_STORE_KEY] ?: s.lastStoreKey,
             backgroundMode = p.enumOr(Keys.BACKGROUND_MODE, s.backgroundMode),
             printBarcode = p[Keys.PRINT_BARCODE] ?: s.printBarcode,
             printShopName = p[Keys.SHOP_NAME] ?: s.printShopName,
@@ -201,6 +203,8 @@ class SettingsStore(private val ds: DataStore<Preferences>) {
         p.putOrRemove(Keys.NOTIFY_PRICE_NOW, next.notifyPriceChangeImmediately, d.notifyPriceChangeImmediately)
         p.putOrRemove(Keys.FREQ_THRESHOLD, next.freqThreshold, d.freqThreshold)
         p.putOrRemove(Keys.FREQ_WINDOW, next.freqWindow.name, d.freqWindow.name)
+        p.putOrRemove(Keys.LOGIN_MODE, next.loginMode.name, d.loginMode.name)
+        p.putOrRemove(Keys.LAST_STORE_KEY, next.lastStoreKey, d.lastStoreKey)
         p.putOrRemove(Keys.BACKGROUND_MODE, next.backgroundMode.name, d.backgroundMode.name)
         p.putOrRemove(Keys.PRINT_BARCODE, next.printBarcode, d.printBarcode)
         p.putOrRemove(Keys.SHOP_NAME, next.printShopName, d.printShopName)
@@ -274,6 +278,9 @@ class SettingsStore(private val ds: DataStore<Preferences>) {
         val FREQ_WINDOW = stringPreferencesKey("freq_window")
         val NOTIFY_DISABLED = stringSetPreferencesKey("notify_disabled")
         val NOTIFY_ENABLED = stringSetPreferencesKey("notify_enabled")
+
+        val LOGIN_MODE = stringPreferencesKey("login_mode")
+        val LAST_STORE_KEY = stringPreferencesKey("last_store_key")
 
         val BACKGROUND_MODE = stringPreferencesKey("background_mode")
 

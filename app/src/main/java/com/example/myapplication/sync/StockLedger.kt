@@ -192,6 +192,25 @@ class StockLedger(
      */
     object DedupKeys {
         /**
+         * `POST /api/orderfiles/add` 响应里的 `stockChanges`（服务器**那一刻**的绝对库存）。
+         *
+         * ## ⚠ key 用 `orderUuid`，不是数值、也不是随机 nonce
+         *
+         * 一笔订单只对每个条码产生**一次**绝对观测，而它的天然标识就是 `orderUuid`：
+         *  - 用 `newStock` 当 key → 两次不同的上传恰好把库存都设成同一个数时，
+         *    第二次被当成重投递跳过 → **边界没推** → 那笔卖出之后仍被扣一遍 → 库存偏低；
+         *  - 用随机 nonce → `recoverInFlight` 重推同一笔会产生两个 nonce，
+         *    同一次观测被吸收两次 → 边界推过头 → 把此后别的设备的扣减也吸收进基线 → 库存偏高。
+         *
+         * `orderUuid` 客户端预生成、写进 outbox 后不可变、重推时复用同一个 ——
+         * 正好是"标识这一次服务器响应事件"所需要的性质。
+         *
+         * ⚠ 必须带上 [barcode]：一笔订单里多个条码各是一次独立观测，
+         * 少了它第二个条码会被第一个顶掉。
+         */
+        fun orderAdd(orderUuid: String, barcode: String) = "O:$orderUuid:$barcode"
+
+        /**
          * 库存/属性流消息。用条目里的 `version` 字段。
          *
          * ## ⚠ 不是 Redis 的 entry id —— 客户端根本收不到它

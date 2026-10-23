@@ -87,7 +87,7 @@ class Service1Api(
     private val baseUrlProvider: () -> String,
     /** 同理：401 重登后 token 变了，必须每次现取。返回 null 表示未登录。 */
     private val tokenProvider: () -> String?,
-) : ProductApi, OrderFileApi {
+) : ProductApi, OrderFileApi, AuthApi {
 
     private val gson = Gson()
 
@@ -229,7 +229,7 @@ class Service1Api(
      * @param priceVersion / @param stockVersion 本地游标，首次登录传 0。
      *        **漏传等于每次登录都拿 FULL**（服务端只有收到游标才 `setSyncData`）。
      */
-    suspend fun login(
+    override suspend fun login(
         username: String,
         password: String,
         priceVersion: Int,
@@ -247,7 +247,7 @@ class Service1Api(
      * ⚠ 字段名与店主登录**不同**（`merchantCode` + `employeeUsername`），
      * 且限速是**独立的桶**（`employee-login-per-minute`），两者互不影响。
      */
-    suspend fun loginEmployee(
+    override suspend fun loginEmployee(
         merchantCode: String,
         employeeUsername: String,
         password: String,
@@ -473,17 +473,18 @@ class Service1Api(
 
     /**
      * `POST /api/orderfiles/add?type=&year=&month=`，body 是**裸订单 JSON**。
+     * 协议契约（write-ahead、不重试、偏移权威性）见 [OrderFileApi.addOrder]，这里只记实现细节。
      *
-     * @param payloadJson 由 `StableOrderJson` 生成的字节串。
-     *        **必须单行、不含控制字符**（服务端 `validateSingleLine` 会拒），
-     *        且 `order_uuid` 必须是第一个字段（客户端靠它推 `lineStart`）。
+     * @param payloadJson **必须单行、不含控制字符**（服务端 `validateSingleLine` 会拒），
+     *        且 `order_uuid` 必须是第一个字段（服务端 `normalizeUuidOffset:1122` 的兜底
+     *        是 `indexOf` 找**第一次出现**，别的字段值撞上就会算出错误偏移）。
      *
      * ⚠ 走 [noRetryClient]，见类注释。
      * ⚠ 超 20KB → [ApiError.PayloadTooLarge]。正确反应是**拆单**，不是重试。
-     * ⚠ 调用**之前**必须已把 outbox 行置 `IN_FLIGHT` 并落盘（write-ahead），
-     *    否则"结果未知"窗口会造成重复订单。
+     * ⚠ `month` 对 A 类必须传 `null`：A 类没有月份，而服务端 `validateTypeAndMonth`
+     *    对 `month < 1 || month > 12` 直接 400。用 [com.example.myapplication.sync.OrderFileId.Parts.monthOrNull]。
      */
-    suspend fun addOrder(
+    override suspend fun addOrder(
         type: String,
         year: Int,
         month: Int?,

@@ -39,7 +39,7 @@ class OrderGroupAssemblerTest {
 
     /** 普通行：13 位条码 + 中文名。方案 R6 实测 ≈87 字节。 */
     private fun line(i: Int, amount: String = "52.00") =
-        OrderLine("6901234567890", "可口可乐330ml", 14, amount)
+        OrderLine("6901234567890", "可口可乐330ml", 14, amount, "1.00")
 
     /** 长行：20 位条码 + 长名字 + 大金额。方案 §3.8 说的"每行能到 110+ 字节"就是这种。 */
     private fun longLine(i: Int) = OrderLine(
@@ -326,7 +326,7 @@ class OrderGroupAssemblerTest {
 
     @Test
     fun 单行就超预算时抛异常_而不是死循环或静默截断() {
-        val huge = OrderLine("6901234567890", "x".repeat(30_000), 1, "1.00")
+        val huge = OrderLine("6901234567890", "x".repeat(30_000), 1, "1.00", "1.00")
         val e = try {
             assembleB(listOf(line(0), huge, line(1)))
             null

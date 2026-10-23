@@ -1,5 +1,6 @@
 package com.example.myapplication.net
 
+import com.example.myapplication.net.dto.OrderAddResultDto
 import com.example.myapplication.net.dto.OrderSyncRequestDto
 
 /**
@@ -12,9 +13,11 @@ import com.example.myapplication.net.dto.OrderSyncRequestDto
  * 而订单文件同步恰恰是**全项目最不能出错**的一段（偏移错了是静默且不可恢复的），
  * 它的每个分支都必须能被单测钉住。
  *
- * 只抽 `sync` / `probeAfter409` 两个方法，**不抽 `/add` 与 `/patch`**：
- * 那两个属于 P5 的 outbox 上传路径，等真写到那儿再按需抽，
- * 免得现在猜一个用不上的形状。
+ * `/add` 在 P5 抽进来了（[addOrder]），因为 `OutboxUploader` 的每个错误分支都必须能测：
+ * 分类错一次就是"服务端其实收下了、客户端退回 READY 重推" → 同一个 uuid 在服务器文件里
+ * 出现两行（服务端不查重）→ 镜像比服务器长 → 此后所有偏移静默错位。
+ *
+ * `/patch` **仍然不抽**：它属于取消/改备注路径，那边写到了再按真实需要抽。
  *
  * ## 错误约定
  *
@@ -23,6 +26,33 @@ import com.example.myapplication.net.dto.OrderSyncRequestDto
  * 游标停在原地却以为已经追平 —— 之后统计少一笔，且没有任何报错。
  */
 interface OrderFileApi {
+
+    /**
+     * `POST /api/orderfiles/add?type=&year=&month=`，body 是**裸订单 JSON**。
+     *
+     * @param payloadJson 由 `StableOrderJson` 生成的字节串，**必须是 outbox 里存的那一份**
+     *        （`order_outbox.payload` 一次写入不可变）。重新序列化会让字节变掉 → 偏移变掉。
+     *
+     * ## ⚠ 调用之前必须已把 outbox 行置 `IN_FLIGHT` 并落盘
+     *
+     * write-ahead 是防重复订单的**唯一**手段：服务端 `order_write.lua` 里没有任何 uuid 去重，
+     * 重复上传同一 uuid 返回 **200**、追加为新行、版本 +1、**库存再扣一次**。
+     * 先发请求再落盘的话，"请求已出去但本地不记得"这个窗口里进程被杀 → 重启后行还是 READY
+     * → 再发一次 → 服务器文件里同一个 uuid 两行 → 镜像比服务器长 → 此后所有偏移静默错位。
+     *
+     * ## 实现方必须走**不重试**的 client
+     *
+     * OkHttp 的自动重试会在"结果未知"时把同一笔订单发两遍，而服务端不查重。
+     *
+     * @return 服务端算出的权威偏移（`uuidOffset` / `statusOffset`）与新版本号。
+     *         `remarkOffset` **不在响应里**，要按 `uuidOffset + (r - u)` 自己推算。
+     */
+    suspend fun addOrder(
+        type: String,
+        year: Int,
+        month: Int?,
+        payloadJson: String,
+    ): OrderAddResultDto
 
     /**
      * `POST /api/orderfiles/sync`。三种响应形状由实现方分辨好，
