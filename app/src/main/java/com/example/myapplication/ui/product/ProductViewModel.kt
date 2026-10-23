@@ -87,30 +87,99 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
         }
     }
     
-    fun addOrUpdateProduct(barcode: String, name: String, price: String,onSuccess: () -> Unit = {}) {
+    /**
+     * 保存一个商品（**v4 形状**：一条记录带 `boxPrice` / `boxSize`）。
+     *
+     * ## ⚠ 取代"建两行"的旧做法
+     *
+     * 旧的新增表单调两次 `addOrUpdateProduct`（已删）：一次存 `<barcode>`（单品价），
+     * 一次存 `"0"+<barcode>`（名字加"整件"后缀、价格填整件价）。那是 v3 的约定，
+     * 而 `MIGRATION_3_4` / `BoxRowMerger` 的作用**正是把这两行合并成一条**。
+     * 于是 schema 已经是 v4、录入界面还在生产 v3 数据：新加的商品会多出一条
+     * `0<barcode>` 的幽灵行，而 `CartPricing` 永远读不到它的整箱价
+     * （整箱价挂在另一个条码上），整箱优惠因此完全不生效。
+     *
+     * ## ⚠ 必须保留已有行的其它字段
+     *
+     * 旧路径构造 `Product(barcode, name, priceValue)`，`stock` / `orderable` /
+     * `category` / `note` 全走默认值，然后 `insertProduct` 原样写库 ——
+     * **改一次价格就把库存清零、把分类和备注抹掉**，而且不报错。
+     * 这里从已有行把它们读回来。
+     *
+     * @param sellsByBox 这个商品按整箱卖吗。false 时 [boxPrice] / [boxSize] 一律忽略，
+     *        存成 `null` / `0`。
+     * @param boxPrice   整箱价文本。**不按整箱卖时必须存 null，不能存 0** ——
+     *        `0` 的语义是"整箱免费"（见 `docs/INTERCHANGE_FORMAT.md` §2.2），
+     *        而 `null` 才是"不按整箱卖"。两者混用会让整箱优惠算出一个负数。
+     * @param boxSize    一箱几个。`0` = 未设置。
+     */
+    fun saveProduct(
+        barcode: String,
+        name: String,
+        price: String,
+        sellsByBox: Boolean,
+        boxPrice: String,
+        boxSize: String,
+        onSuccess: () -> Unit = {},
+    ) {
         viewModelScope.launch {
             try {
-                val priceValue = try {
-                    BigDecimal(price)
-                } catch (e: Exception) {
-                    null
-                }
-                if (priceValue == null || priceValue < BigDecimal.ZERO) {
-                    _message.value = "请输入有效的价格"
+                val code = barcode.trim()
+                if (code.isEmpty()) {
+                    _message.value = "请输入条形码"
                     return@launch
                 }
                 if (name.isBlank()) {
                     _message.value = "请输入商品名"
                     return@launch
                 }
-                if (barcode.isBlank()) {
-                    _message.value = "请输入条形码"
+                val priceValue = parsePrice(price)
+                if (priceValue == null) {
+                    _message.value = "请输入有效的单价"
                     return@launch
                 }
 
-                val product = Product(barcode = barcode, name = name, price = priceValue)
-                repository.insertProduct(product)
-                _message.value = "商品已保存"
+                var boxPriceValue: BigDecimal? = null
+                var boxSizeValue = 0
+                if (sellsByBox) {
+                    boxPriceValue = parsePrice(boxPrice)
+                    if (boxPriceValue == null) {
+                        _message.value = "按整箱卖就必须填整箱价"
+                        return@launch
+                    }
+                    boxSizeValue = boxSize.trim().toIntOrNull() ?: 0
+                    // ⚠ 有整箱价却没箱规 = Product.needsBoxSize，那是个坏状态：
+                    // 钱算得出、个数算不出，于是开单时只能按散卖计价 —— 整箱价被忽略、
+                    // 多收顾客的钱，而且票面自洽看不出来（CartPricing.ambiguousBoxProducts
+                    // 就是为了把这种情况报出来）。在录入这一刻就拦住，比事后补救便宜。
+                    if (boxSizeValue <= 0) {
+                        _message.value = "按整箱卖就必须填一箱装几个（大于 0）"
+                        return@launch
+                    }
+                }
+
+                val existing = repository.getProductByBarcode(code)
+                val product = Product(
+                    barcode = code,
+                    name = name.trim(),
+                    price = priceValue,
+                    boxPrice = boxPriceValue,
+                    boxSize = boxSizeValue,
+                    // 这四个一律沿用已有行：它们是这次编辑**没有涉及**的东西
+                    stock = existing?.stock ?: 0,
+                    orderable = existing?.orderable ?: true,
+                    category = existing?.category ?: "",
+                    note = existing?.note ?: "",
+                    origin = existing?.origin ?: Product.ORIGIN_LOCAL,
+                    storeKey = existing?.storeKey ?: "",
+                )
+                if (existing != null) repository.updateProduct(product) else repository.insertProduct(product)
+
+                _message.value = if (sellsByBox) {
+                    "商品已保存（整箱 $boxPriceValue / 一箱 $boxSizeValue 个）"
+                } else {
+                    "商品已保存"
+                }
                 onSuccess()
             } catch (e: Exception) {
                 _message.value = "保存失败: ${e.message}"
@@ -118,36 +187,10 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
         }
     }
 
-    fun updateProduct(barcode: String, name: String, price: String) {
-        viewModelScope.launch {
-            try {
-                val priceValue = try {
-                    BigDecimal(price)
-                } catch (e: Exception) {
-                    null
-                }
-                if (priceValue == null || priceValue < BigDecimal.ZERO) {
-                    _message.value = "请输入有效的价格"
-                    return@launch
-                }
-                if (name.isBlank()) {
-                    _message.value = "请输入商品名"
-                    return@launch
-                }
+    /** 价格文本 → BigDecimal。空串、解析失败、负数一律 null（调用方负责报错）。 */
+    private fun parsePrice(raw: String): BigDecimal? =
+        runCatching { BigDecimal(raw.trim()) }.getOrNull()?.takeIf { it >= BigDecimal.ZERO }
 
-                val product = repository.getProductByBarcode(barcode)
-                if (product != null) {
-                    val updatedProduct = product.copy(name = name, price = priceValue)
-                    repository.updateProduct(updatedProduct)
-                    _message.value = "商品已更新"
-                } else {
-                    _message.value = "商品不存在"
-                }
-            } catch (e: Exception) {
-                _message.value = "更新失败: ${e.message}"
-            }
-        }
-    }
     
     fun searchProductsByName(query: String): List<Product> {
         if (query.isBlank()) {

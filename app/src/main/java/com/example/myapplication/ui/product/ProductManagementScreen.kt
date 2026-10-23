@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.data.Product
 import com.example.myapplication.data.ImportResult
@@ -114,8 +115,17 @@ fun AddProductScreen(
     var name by remember { mutableStateOf("") }
     var price by remember { mutableStateOf("") }
 
-    var pricewhole by remember { mutableStateOf("") }
-    
+    /**
+     * 这个商品按整箱卖吗。
+     *
+     * 关着的时候下面两个框**不显示**，存进去的是 `boxPrice = null` / `boxSize = 0`。
+     * ⚠ 不是存 `boxPrice = 0`：0 的语义是"整箱免费"，null 才是"不按整箱卖"
+     * （见 docs/INTERCHANGE_FORMAT.md §2.2）。混用的话整箱优惠会算出负数。
+     */
+    var sellsByBox by remember { mutableStateOf(false) }
+    var boxPrice by remember { mutableStateOf("") }
+    var boxSize by remember { mutableStateOf("") }
+
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
     
@@ -185,42 +195,87 @@ fun AddProductScreen(
                     label = { Text("一个的价格") },
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
-                    value = pricewhole,
-                    onValueChange = { pricewhole = it },
-                    label = { Text("整件的价格") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                
+
+                // 整箱规格与整箱价：**只在需要时才显示**。
+                // 一直摆着的话，用户会给每个商品都随手填个 0，而 0 是"整箱免费"、
+                // 空箱规又是"算不出个数"的坏状态 —— 两种都会在开单时静默算错钱。
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("这个商品按整箱卖", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "关掉就只存单价；打开则必须填整箱价和一箱几个",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = sellsByBox, onCheckedChange = { sellsByBox = it })
+                }
+
+                if (sellsByBox) {
+                    OutlinedTextField(
+                        value = boxPrice,
+                        onValueChange = { boxPrice = it },
+                        label = { Text("整箱的价格") },
+                        supportingText = { Text("一箱的总价，不是单价 × 箱规") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = boxSize,
+                        onValueChange = { boxSize = it.filter(Char::isDigit) },
+                        label = { Text("一箱装几个") },
+                        // ⚠ 这个值不能省：整箱价与箱规是两个独立的东西，
+                        // 只有整箱价的话开单时算得出钱、算不出个数（quantity 是扣库存的依据）。
+                        supportingText = { Text("开单时靠它把个数换算成箱 + 零散") },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = KeyboardType.Number
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
                         onClick = {
-                            viewModel.addOrUpdateProduct("0"+barcode, name+"整件", pricewhole,onSuccess = {
-
-                            })
-                            viewModel.addOrUpdateProduct(barcode, name, price,onSuccess = {
-                                // 成功时清空输入框
-                                barcode = ""
-                                name = ""
-                                price = ""
-                                pricewhole=""
-
-                            })
+                            // ⚠ 只存**一条**记录。旧代码在这里调两次、额外建一条
+                            // "0"+barcode 的"整件"行 —— 那是 v3 的约定，而 MIGRATION_3_4
+                            // 的作用正是把这两行合并掉。继续那么写等于新加的商品
+                            // 永远拿不到整箱价（它挂在另一个条码上）。
+                            viewModel.saveProduct(
+                                barcode = barcode,
+                                name = name,
+                                price = price,
+                                sellsByBox = sellsByBox,
+                                boxPrice = boxPrice,
+                                boxSize = boxSize,
+                                onSuccess = {
+                                    barcode = ""
+                                    name = ""
+                                    price = ""
+                                    sellsByBox = false
+                                    boxPrice = ""
+                                    boxSize = ""
+                                },
+                            )
                         },
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("保存商品")
                     }
-                    
+
                     OutlinedButton(
                         onClick = {
                             barcode = ""
                             name = ""
                             price = ""
-                            pricewhole=""
+                            sellsByBox = false
+                            boxPrice = ""
+                            boxSize = ""
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -246,16 +301,25 @@ fun ModifyProductScreen(
     var editBarcode by remember { mutableStateOf("") }
     var editName by remember { mutableStateOf("") }
     var editPrice by remember { mutableStateOf("") }
+    var editSellsByBox by remember { mutableStateOf(false) }
+    var editBoxPrice by remember { mutableStateOf("") }
+    var editBoxSize by remember { mutableStateOf("") }
     var refreshTrigger by remember { mutableStateOf(0) }
     val filteredProducts = remember(searchQuery,refreshTrigger) {
         viewModel.searchProductsByName(searchQuery)
     }
-    
+
     LaunchedEffect(selectedProduct) {
         selectedProduct?.let { product ->
             editBarcode = product.barcode
             editName = product.name
             editPrice = product.price.toString()
+            // ⚠ 判据用 `boxPrice != null`，不是 `boxSize > 0`：
+            // boxPrice 为 null 才是"不按整箱卖"，而 boxSize == 0 只表示"箱规没填"。
+            // 用后者判断会把"整箱免费"（boxPrice = 0）误显示成不按整箱卖。
+            editSellsByBox = product.boxPrice != null
+            editBoxPrice = product.boxPrice?.toPlainString() ?: ""
+            editBoxSize = if (product.boxSize > 0) product.boxSize.toString() else ""
         }
     }
     
@@ -388,10 +452,47 @@ fun ModifyProductScreen(
                     OutlinedTextField(
                         value = editPrice,
                         onValueChange = { editPrice = it },
-                        label = { Text("价格") },
+                        label = { Text("一个的价格") },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    
+
+                    // 与新增表单同一套：不按整箱卖就**不显示**这两个框，
+                    // 存进去的是 boxPrice = null / boxSize = 0（不是 0 / 0）。
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("这个商品按整箱卖", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "关掉会把已填的整箱价清成 null（= 不按整箱卖，不是免费）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = editSellsByBox, onCheckedChange = { editSellsByBox = it })
+                    }
+
+                    if (editSellsByBox) {
+                        OutlinedTextField(
+                            value = editBoxPrice,
+                            onValueChange = { editBoxPrice = it },
+                            label = { Text("整箱的价格") },
+                            supportingText = { Text("一箱的总价，不是单价 × 箱规") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = editBoxSize,
+                            onValueChange = { editBoxSize = it.filter(Char::isDigit) },
+                            label = { Text("一箱装几个") },
+                            supportingText = { Text("开单时靠它把个数换算成箱 + 零散") },
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = KeyboardType.Number
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -399,7 +500,17 @@ fun ModifyProductScreen(
                         Button(
                             onClick = {
                                 if (editBarcode.isNotBlank()) {
-                                    viewModel.updateProduct(editBarcode, editName, editPrice)
+                                    // 走 saveProduct 而不是旧的 updateProduct：
+                                    // 后者只接受 (barcode, name, price)，会把 boxPrice /
+                                    // boxSize / stock / category / note 全部按默认值写回去。
+                                    viewModel.saveProduct(
+                                        barcode = editBarcode,
+                                        name = editName,
+                                        price = editPrice,
+                                        sellsByBox = editSellsByBox,
+                                        boxPrice = editBoxPrice,
+                                        boxSize = editBoxSize,
+                                    )
 
                                     refreshTrigger++
                                     selectedProduct = null
@@ -407,19 +518,25 @@ fun ModifyProductScreen(
                                     editBarcode = ""
                                     editName = ""
                                     editPrice = ""
+                                    editSellsByBox = false
+                                    editBoxPrice = ""
+                                    editBoxSize = ""
                                 }
                             },
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("保存修改")
                         }
-                        
+
                         OutlinedButton(
                             onClick = {
                                 selectedProduct = null
                                 editBarcode = ""
                                 editName = ""
                                 editPrice = ""
+                                editSellsByBox = false
+                                editBoxPrice = ""
+                                editBoxSize = ""
                             },
                             modifier = Modifier.weight(1f)
                         ) {

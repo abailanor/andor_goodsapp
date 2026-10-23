@@ -4,6 +4,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
@@ -21,6 +23,7 @@ import com.example.myapplication.app.ServiceLocator
 import com.example.myapplication.data.PendingOrderLoader
 import com.example.myapplication.data.ProductRepository
 import com.example.myapplication.data.SessionRepository.SessionState
+import com.example.myapplication.ui.ModeSwitchBar
 import com.example.myapplication.ui.ai.AIScreen
 import com.example.myapplication.ui.ai.AIViewModel
 import com.example.myapplication.ui.history.OrderHistoryScreen
@@ -28,6 +31,7 @@ import com.example.myapplication.ui.login.LoginScreen
 import com.example.myapplication.ui.login.LoginViewModel
 import com.example.myapplication.ui.more.MoreScreen
 import com.example.myapplication.ui.order.OrderScreen
+import com.example.myapplication.ui.rememberAppBackgroundColor
 import com.example.myapplication.ui.order.OrderViewModel
 import com.example.myapplication.ui.orders.OrdersScreen
 import com.example.myapplication.ui.orders.OrdersViewModel
@@ -160,7 +164,10 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                 }
             }
         },
-        containerColor = Color(0x0FF5F5F5),
+        // ⚠ 底色跟着开单模式变：进货模式下整个应用变成浅橙色。
+        // 这是防误操作的**唯一实时**信号 —— 店员照着昨天的界面点下去，
+        // 开出来的是一张不计营收、不扣库存的 A 类进货单，那一单会凭空消失。
+        containerColor = rememberAppBackgroundColor(),
     ) { paddingValues ->
         NavHost(
             navController = navController,
@@ -183,7 +190,13 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                     }
                 }
 
-                OrderScreen(viewModel = viewModel, aiViewModel = sharedAIViewModel)
+                // 模式切换条吸顶：底色会在列表滚动后被盖住，但这一条永远看得见。
+                Column(Modifier.fillMaxSize()) {
+                    ModeSwitchBar()
+                    Box(Modifier.weight(1f)) {
+                        OrderScreen(viewModel = viewModel, aiViewModel = sharedAIViewModel)
+                    }
+                }
             }
 
             composable(Screen.Orders.route) {
@@ -259,16 +272,24 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                 val viewModel = viewModel<PendingOrdersViewModel>(
                     factory = PendingOrdersViewModelFactory(repository, context)
                 )
-                PendingOrdersScreen(
-                    viewModel = viewModel,
-                    onNavigateToOrder = {
-                        navController.navigate(Screen.Order.route) { launchSingleTop = true }
+                Column(Modifier.fillMaxSize()) {
+                    ModeSwitchBar()
+                    Box(Modifier.weight(1f)) {
+                        PendingOrdersScreen(
+                            viewModel = viewModel,
+                            onNavigateToOrder = {
+                                navController.navigate(Screen.Order.route) { launchSingleTop = true }
+                            }
+                        )
                     }
-                )
+                }
             }
 
             composable(Screen.LegacyHistory.route) {
-                OrderHistoryScreen()
+                Column(Modifier.fillMaxSize()) {
+                    ModeSwitchBar()
+                    Box(Modifier.weight(1f)) { OrderHistoryScreen() }
+                }
             }
 
             composable(Screen.AI.route) {
