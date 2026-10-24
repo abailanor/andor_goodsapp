@@ -144,16 +144,25 @@ class OrdersViewModel(
     }
 
     /**
-     * 全选**能上传的**那些。
+     * 全选**本机能上传的**那些。
      *
-     * ⚠ 不是"全选列表里所有未上传的行"：`BLOCKED`（缺箱规）、`IN_FLIGHT`（结果未知）、
-     * `FAILED_PERMANENT`（重推无意义）勾上了也发不出去，只会让"已选 N 笔"这个数字骗人。
+     * ⚠ 不是"全选列表里所有未上传的行"，有两个排除：
+     *  - `BLOCKED`（缺箱规）、`IN_FLIGHT`（结果未知）、`FAILED_PERMANENT`（重推无意义）
+     *    勾上了也发不出去，只会让"已选 N 笔"这个数字骗人；
+     *  - **别的设备传来的单**（[OrderRow.isForeign]）：正常情况下创建者自己会上传，
+     *    两边都传就是同一个 uuid 在服务端文件里两行 + 库存扣两次。
+     *    接管必须是**一笔一笔手动勾**的明确动作，不能被"全选"顺手带走。
      */
     fun selectAllUploadable() {
         _selected.value = rows.value
-            .filter { it.source == OrderRow.Source.PENDING_READY }
+            .filter { it.source == OrderRow.Source.PENDING_READY && !it.isForeign }
             .map { it.orderUuid }
             .toSet()
+    }
+
+    /** 手动接管一笔外部单（勾选它）。二次确认由 UI 负责。 */
+    fun selectForeign(uuid: String) {
+        _selected.value = _selected.value + uuid
     }
 
     fun clearSelection() {

@@ -67,7 +67,11 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
     LaunchedEffect(Unit) { viewModel.refreshDrift() }
 
     val pending = rows.count { it.source.isPending }
-    val uploadable = rows.count { it.source == OrderRow.Source.PENDING_READY }
+    // ⚠ "可上传"只数**本机**的单。别的设备通过热点同步传来的那些不算 ——
+    // 正常情况下创建者自己会上传，两边都传就是同一个 uuid 在服务端文件里两行
+    // （服务端不查重）+ 库存扣两次。接管必须一笔一笔手动勾。
+    val uploadable = rows.count { it.source == OrderRow.Source.PENDING_READY && !it.isForeign }
+    val foreign = rows.count { it.isForeign && it.source.isPending }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -140,6 +144,28 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
                             TextButton(onClick = { viewModel.clearSelection() }) { Text("取消选择") }
                         }
                     }
+                }
+            }
+        }
+
+        // 别的设备通过热点同步传来的单。单独说明，因为它们的上传规则不一样。
+        if (foreign > 0) {
+            Spacer(Modifier.height(8.dp))
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "$foreign 笔来自其他设备",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "这些单是离线时从别的设备同步过来的。**不会自动上传** —— " +
+                            "正常情况下开单的那台设备自己会传，两边都传的话服务端不查重，" +
+                            "会变成两笔订单、库存扣两次。" +
+                            "只有那台设备确定不会再开机了，才在这里一笔一笔勾出来接管。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -414,6 +440,15 @@ private fun OrderRowView(
                 if (row.groupId.isNotEmpty()) {
                     Spacer(Modifier.width(6.dp))
                     Badge("拆单 ${row.groupId.take(4)}")
+                }
+                if (row.isForeign) {
+                    Spacer(Modifier.width(6.dp))
+                    // 必须显眼：勾选它 = 接管，而接管的后果是"两台设备都可能传这一笔"。
+                    Text(
+                        "其他设备",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
             Spacer(Modifier.height(2.dp))

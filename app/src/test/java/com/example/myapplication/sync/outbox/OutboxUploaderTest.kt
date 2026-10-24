@@ -110,12 +110,17 @@ class OutboxUploaderTest {
     private val fileScope = StatsProjection.fileScope(fileIdB)
     private val cola = "6901234567890"
 
+    /** 本机设备 id。别的设备传来的单会带着一个不同的值。 */
+    private val MY_DEVICE = "device-mine"
+    private val OTHER_DEVICE = "device-theirs"
+
     private val store = OutboxStore(
         dao = dao,
         inTransaction = { body -> body() },
         timeZone = { utc },
         now = { clock },
         uuidFactory = { nextUuid() },
+        deviceId = { MY_DEVICE },
         audit = { audits += it },
     )
 
@@ -152,6 +157,7 @@ class OutboxUploaderTest {
             },
             dao = dao,
             stockLedger = ledger,
+            deviceId = { MY_DEVICE },
             audit = { audits += it },
         )
     }
@@ -799,6 +805,8 @@ class OutboxUploaderTest {
         val a = newOrder()
         clock = 2_000L
         val b = newOrder(req(lines = listOf(line(barcode = "6909999999999"))))
+        // uploadReady 会先同步一次（防跨设备重复上传的第二道闸门）
+        syncScript += OrderFileSyncEngine.Outcome.UpToDate(version = 0, streamId = "")
         serveAdd()
         serveAdd()
 
@@ -818,6 +826,7 @@ class OutboxUploaderTest {
         val a = newOrder()
         val b = newOrder(req(lines = listOf(line(barcode = "6901111111111"))))
         val c = newOrder(req(lines = listOf(line(barcode = "6902222222222"))))
+        syncScript += OrderFileSyncEngine.Outcome.UpToDate(version = 0, streamId = "")
         api.throwOnNext = ApiError.RateLimited("太频繁")
         serveAdd()
         serveAdd()
@@ -837,6 +846,7 @@ class OutboxUploaderTest {
     @Test
     fun `limit_截断_剩下的留给下一轮`() {
         val uuids = (1..3).map { newOrder(req(lines = listOf(line(barcode = "69012345678$it")))) }
+        syncScript += OrderFileSyncEngine.Outcome.UpToDate(version = 0, streamId = "")
         serveAdd()
         serveAdd()
 
@@ -846,6 +856,137 @@ class OutboxUploaderTest {
         assertEquals(1, report.remaining)
         assertEquals(2, api.adds.size)
         assertEquals(OrderOutboxEntity.READY, state(uuids[2]))
+    }
+
+    // ==================== 跨设备防重复上传 ====================
+
+    /** 把一笔已入库的单改成"别的设备传来的"（模拟热点同步落地的结果）。 */
+    private fun markForeign(uuid: String) {
+        val row = dao.outbox[storeKey to uuid]!!
+        dao.outbox[storeKey to uuid] = row.copy(originDevice = OTHER_DEVICE)
+    }
+
+    @Test
+    fun `uploadReady_只上传本机创建的单_外部单一笔都不发`() {
+        val mine = newOrder()
+        val theirs = newOrder(req(lines = listOf(line(barcode = "6909999999999"))))
+        markForeign(theirs)
+        syncScript += OrderFileSyncEngine.Outcome.UpToDate(version = 0, streamId = "")
+        serveAdd()
+
+        val report = runBlocking { uploader.uploadReady(storeKey, ownerName) }
+
+        // ⚠ 这是防跨设备重复上传的第一道闸门：对方传来的单，正常情况下创建者自己会上传它。
+        // 两边都自动传 → 服务端不查重 → 同一个 uuid 两行 + 库存扣两次。
+        assertEquals(1, report.promoted)
+        assertEquals(1, api.adds.size)
+        assertEquals(mine, uuidOf(api.adds.single().payload))
+        assertEquals(OrderOutboxEntity.PROMOTED, state(mine))
+        // 外部单原样留着，等用户在「订单」页明确勾选
+        assertEquals(OrderOutboxEntity.READY, state(theirs))
+    }
+
+    @Test
+    fun `空_originDevice_算本机_因为那是迁移前的老行`() {
+        val uuid = newOrder()
+        dao.outbox[storeKey to uuid] = dao.outbox[storeKey to uuid]!!.copy(originDevice = "")
+        syncScript += OrderFileSyncEngine.Outcome.UpToDate(version = 0, streamId = "")
+        serveAdd()
+
+        val report = runBlocking { uploader.uploadReady(storeKey, ownerName) }
+
+        // 把空串当"外部"的话，升级之后用户自己开的单会全部变成"来自其他设备"、
+        // 永远不自动上传 —— 而他明明记得是自己开的。
+        assertEquals(1, report.promoted)
+        assertEquals(1, api.adds.size)
+    }
+
+    @Test
+    fun `uploadReady_上传前先同步_别人已经传过的不再发`() {
+        val uuid = newOrder()
+        // 同步期间：服务端已经有了这一笔（对方设备传上去的），
+        // 于是 applyAdded → promoteFromOutbox 把本地行翻成 PROMOTED
+        promoteDuringSync(uuid)
+        syncScript += OrderFileSyncEngine.Outcome.Applied(applied = 1, echoes = 0, version = 1, streamId = "1-0")
+        serveAdd()
+
+        val report = runBlocking { uploader.uploadReady(storeKey, ownerName) }
+
+        // ⚠ 这是第二道闸门，也是真正关掉竞态的那一道：
+        // 不先同步就发的话，两台设备会各自把同一笔单传一遍。
+        assertTrue("同步过就不该再发（审计：$audits）", api.adds.isEmpty())
+        assertEquals(1, report.promoted)
+        assertEquals(OrderOutboxEntity.PROMOTED, state(uuid))
+        assertEquals(listOf(fileIdB), syncedFiles)
+    }
+
+    @Test
+    fun `uploadReady_同步之后没有本机单可发时直接返回`() {
+        val a = newOrder()
+        val b = newOrder(req(lines = listOf(line(barcode = "6909999999999"))))
+        duringSync = {
+            seedIndex(a)
+            seedIndex(b)
+            runBlocking {
+                dao.markOutboxPromoted(storeKey, a)
+                dao.markOutboxPromoted(storeKey, b)
+            }
+        }
+        syncScript += OrderFileSyncEngine.Outcome.Applied(applied = 2, echoes = 0, version = 2, streamId = "2-0")
+
+        val report = runBlocking { uploader.uploadReady(storeKey, ownerName) }
+
+        assertEquals(2, report.promoted)
+        assertTrue(api.adds.isEmpty())
+        assertTrue(audits.any { "都已被别的设备传上去了" in it })
+    }
+
+    @Test
+    fun `uploadOne_可以上传外部单_因为那是用户明确勾选的接管`() {
+        val uuid = newOrder()
+        markForeign(uuid)
+        serveAdd()
+
+        // 闸门只加在 uploadReady（自动批量）上；uploadOne 是用户在「订单」页
+        // 一笔一笔勾出来的，那已经是明确意图了 —— 用于"那台设备再也不会开机了"。
+        val r = runBlocking { uploader.uploadOne(storeKey, ownerName, uuid) }
+
+        assertTrue("期望 Promoted，实际 $r（审计：$audits）", r is OutboxUploader.UploadResult.Promoted)
+        assertEquals(OrderOutboxEntity.PROMOTED, state(uuid))
+    }
+
+    @Test
+    fun `同一个_fileId_的多笔本机单_上传前只同步一次`() {
+        newOrder()
+        newOrder(req(lines = listOf(line(barcode = "6909999999999"))))
+        syncScript += OrderFileSyncEngine.Outcome.UpToDate(version = 0, streamId = "")
+        serveAdd()
+        serveAdd()
+
+        runBlocking { uploader.uploadReady(storeKey, ownerName) }
+
+        // 一次 FULL 可能是几 MB，而同一个月的十笔单共享同一个文件
+        assertEquals(listOf(fileIdB), syncedFiles)
+        assertEquals(2, api.adds.size)
+    }
+
+    @Test
+    fun `上传前同步失败时仍然继续上传_但记审计`() {
+        val uuid = newOrder()
+        syncScript += OrderFileSyncEngine.Outcome.Failed("断网", retriable = true)
+        api.throwOnNext = ApiError.Network(IOException("还是断网"))
+
+        val report = runBlocking { uploader.uploadReady(storeKey, ownerName) }
+
+        // 同步没追平不等于不能上传（可能只是那一次抖动）。但竞态窗口变大了，必须记下来。
+        // ⚠ 引擎不抛异常，失败是折进 Outcome.Failed 返回的 —— 只盯 runCatching 的
+        // onFailure 就等于永远不会告警。
+        assertTrue("审计：$audits", audits.any { "上传前同步没追平" in it })
+        // 上传本身也断网了 → 结果**未知**，留在 IN_FLIGHT 等 recoverInFlight，
+        // 绝不退回 READY（退回就等于授权重推，而服务端可能已经收下了）。
+        assertEquals(1, report.unknown)
+        assertEquals(0, report.retryLater)
+        assertEquals(OrderOutboxEntity.IN_FLIGHT, state(uuid))
     }
 
     @Test

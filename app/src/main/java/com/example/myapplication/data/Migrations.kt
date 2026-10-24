@@ -134,6 +134,40 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
 }
 
 /**
+ * v4 → v5：`order_outbox` 增加 `originDevice`（这一行是哪台设备创建的）。
+ *
+ * ## 为什么需要
+ *
+ * 离线时两台设备通过热点互相同步未上传的订单，同步之后双方手上都有同一批 uuid。
+ * 上线时若两边都自动上传：服务端 `order_write.lua` 里**没有任何 uuid 去重**，
+ * 重复上传返回 200、追加为新行、**库存再扣一次**，而镜像比服务器长、
+ * 此后所有偏移静默错位 —— 等长覆写不报错、文件长度不变、校验和自洽，
+ * **没有任何机制会发现**。
+ *
+ * 有了出处就能定一条简单规则：只自动上传本机创建的单，别的设备传来的单
+ * 只有用户明确勾选时才上传（接管）。
+ *
+ * ## ⚠ 老行填空串，而空串按"本机"处理
+ *
+ * v5 之前的行都是这台设备自己开的、从来没有被别人同步走过，所以把它们当本机单
+ * 是**正确**的，不是将就。反过来说，如果填了一个假的设备 id，那些行就会变成
+ * "来自其他设备"、永远不自动上传 —— 用户明明是自己开的单，却要手动接管。
+ *
+ * ## ⚠ `DEFAULT ''` 必须与实体上的 `@ColumnInfo(defaultValue = "")` 一致
+ *
+ * Room 在打开库时会把实际 schema 与实体声明的 schema 逐列比对（含 defaultValue），
+ * 对不上就抛 `IllegalStateException` 且**App 起不来**。ALTER TABLE 加 NOT NULL 列
+ * 又必须给 DEFAULT（否则已有行没值），所以两边都要写。
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `order_outbox` ADD COLUMN `originDevice` TEXT NOT NULL DEFAULT ''"
+        )
+    }
+}
+
+/**
  * 月份枚举的硬下界。
  *
  * `createdAt` 可能是 `0`（未知，README §4.1 明确允许）。没有下界的话后台补同步会

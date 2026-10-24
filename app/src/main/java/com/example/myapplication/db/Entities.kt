@@ -1,5 +1,6 @@
 package com.example.myapplication.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import java.math.BigDecimal
@@ -462,6 +463,28 @@ data class OrderOutboxEntity(
     val totalCents: Long,
     val itemCount: Int,
     val orderTs: Long,
+    /**
+     * 创建这一行的**设备 id**（`ServiceLocator.deviceId`）。
+     *
+     * ## 为什么需要它
+     *
+     * 离线时两台设备通过热点互相同步未上传的订单，同步之后双方手上都有同一批 uuid。
+     * 上线时若两边都自动上传：服务端 `order_write.lua` 里**没有任何 uuid 去重**，
+     * 重复上传返回 200、追加为新行、**库存再扣一次**，而镜像比服务器长、
+     * 此后所有偏移静默错位 —— 等长覆写不报错、文件长度不变、校验和自洽，
+     * **没有任何机制会发现**。
+     *
+     * 有了出处就能定一条简单规则：**只自动上传本机创建的单**（`uploadReady` 按它过滤），
+     * 别的设备传来的单在「订单」页单独分组、只有用户明确勾选时才上传（接管）。
+     * 正常情况下创建者自己会上传它；接管只用于"那台设备再也不会开机了"。
+     *
+     * ## ⚠ 空串 = 本机创建（迁移前的老行）
+     *
+     * v5 之前没有这一列，迁移时全部填空串。空串按"本机"处理是安全的：
+     * 那些行本来就是这台设备自己开的，从来没有被别人同步走过。
+     */
+    @ColumnInfo(defaultValue = "")
+    val originDevice: String = "",
 ) {
     companion object {
         /**

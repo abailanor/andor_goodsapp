@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.TimeZone
+import java.util.UUID
 
 /**
  * 手写 ServiceLocator（**不引 DI 框架**，与项目现状一致）。
@@ -280,6 +281,43 @@ class ServiceLocator(context: Context) {
         return withContext(Dispatchers.IO) { apiInstance }
     }
 
+    /**
+     * 本机设备 id。**安装后第一次访问时生成，之后永久不变。**
+     *
+     * ## 用来干什么
+     *
+     * 标 outbox 行的**出处**（`order_outbox.originDevice`）。离线时两台设备通过热点
+     * 互相交换未上传的订单，交换之后双方手上都有同一批 uuid；
+     * 上线时若两边都自动上传，服务端不查重（`order_write.lua` 里没有任何去重）→
+     * 同一个 uuid 在文件里出现两行、**库存扣两次**，而镜像比服务器长、
+     * 此后所有偏移静默错位。
+     *
+     * 有了出处就能定一条简单规则：**只自动上传本机创建的单**，
+     * 别的设备传来的单在「订单」页单独列出来、只有用户明确勾选时才上传（接管）。
+     * 正常情况下创建者自己会上传它，接管只用于"那台设备再也不会开机了"。
+     *
+     * ## ⚠ 为什么用 SharedPreferences 而不是 DataStore
+     *
+     * `OutboxStore.enqueue` 在写行的那一刻就需要这个值，而 DataStore 的读是**挂起**的
+     * （`SettingsStore` 要先 `awaitLoaded()`）。让开单路径去等一个异步设置加载，
+     * 就等于给"按下上传"这件事加了一个可能挂住的前置条件。
+     * SharedPreferences 的首次读虽然也碰磁盘，但只有几十字节、且是 `by lazy`，
+     * 第一次真正开单时才发生。
+     *
+     * ## ⚠ 重装会变
+     *
+     * 卸载重装会生成新 id，于是旧 id 名下那些没传出去的单会变成"来自其他设备"、
+     * 不再自动上传。这是**可接受**的：用户能在「订单」页看见它们并手动接管，
+     * 而如果为了"稳定"去用 ANDROID_ID 之类的硬件标识，换机/恢复出厂时会静默串号 ——
+     * 那比多一次手动接管糟得多。
+     */
+    val deviceId: String by lazy {
+        val prefs = appContext.getSharedPreferences("device_identity", Context.MODE_PRIVATE)
+        prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also {
+            prefs.edit().putString("device_id", it).apply()
+        }
+    }
+
     // ==================== 网络接口的转发层 ====================
 
     /**
@@ -426,7 +464,7 @@ class ServiceLocator(context: Context) {
     val stockLedger: StockLedger by lazy { StockLedger(stockDao, now) }
 
     val outboxStore: OutboxStore by lazy {
-        OutboxStore.of(database, orderFileDao, timeZone, now, audit("OUTBOX"))
+        OutboxStore.of(database, orderFileDao, timeZone, now, deviceId = { deviceId }, audit("OUTBOX"))
     }
 
     val orderFileSyncEngine: OrderFileSyncEngine by lazy {
@@ -441,6 +479,7 @@ class ServiceLocator(context: Context) {
             syncFile = orderFileSyncEngine::sync,
             dao = orderFileDao,
             stockLedger = stockLedger,
+            deviceId = { deviceId },
             audit = audit("OUTBOX"),
         )
     }
@@ -501,6 +540,7 @@ class ServiceLocator(context: Context) {
             uploader = outboxUploader,
             storeKey = ::currentStoreKey,
             ownerName = ::currentOwnerName,
+            deviceId = { deviceId },
             audit = audit("ORDER"),
         )
     }

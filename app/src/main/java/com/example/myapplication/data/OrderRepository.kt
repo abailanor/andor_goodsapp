@@ -39,6 +39,17 @@ data class OrderRow(
     val groupId: String,
     val source: Source,
     /**
+     * 这一行是**别的设备**通过热点同步传过来的，不是本机开的。
+     *
+     * ⚠ 外部单**只能手动勾选上传**，绝不参与"全选可上传的"或自动批量上传：
+     * 正常情况下创建它的那台设备自己会上传，两边都传就是同一个 uuid 在服务端
+     * 文件里出现两行（服务端不查重）+ 库存扣两次。手动勾选是"接管"——
+     * 用于那台设备再也不会开机了的情况。
+     *
+     * 空 `originDevice` 算本机（v5 迁移前的老行，本来就是这台设备开的）。
+     */
+    val isForeign: Boolean = false,
+    /**
      * `A` = 进货 / `B` = 销售（[com.example.myapplication.sync.OrderFileId.TYPE_A] / `TYPE_B`）。
      *
      * 订单页要按开单模式筛选：销售模式下不该看到进货单，反之亦然 ——
@@ -99,6 +110,8 @@ class OrderRepository(
     private val uploader: OutboxUploader,
     private val storeKey: () -> String,
     private val ownerName: () -> String,
+    /** 本机设备 id，用来把"别的设备传来的单"标出来。见 [OrderRow.isForeign]。 */
+    private val deviceId: () -> String = { "" },
     private val audit: (String) -> Unit = {},
 ) {
 
@@ -118,7 +131,7 @@ class OrderRepository(
             val pendingHere = pending.filter { r ->
                 r.orderTs in fromTs until toTs && (writer == null || r.writer == writer)
             }
-            merge(synced, pendingHere)
+            merge(synced, pendingHere, deviceId())
         }
     }
 
@@ -227,6 +240,7 @@ class OrderRepository(
         fun merge(
             synced: List<OrderIndexEntity>,
             pending: List<OrderOutboxEntity>,
+            myDeviceId: String = "",
         ): List<OrderRow> {
             val rows = ArrayList<OrderRow>(synced.size + pending.size)
             val seen = HashSet<String>(synced.size + pending.size)
@@ -261,6 +275,9 @@ class OrderRepository(
                     status = 1,
                     groupId = p.groupId,
                     source = sourceOf(p.state),
+                    // 空串算本机：那是 v5 迁移前的老行，本来就是这台设备开的。
+                    // 判成"外部"的话用户自己开的单会永远不自动上传。
+                    isForeign = p.originDevice.isNotEmpty() && p.originDevice != myDeviceId,
                     fileType = p.fileType,
                     manualTotal = false,
                     remark = null,

@@ -61,6 +61,12 @@ class OutboxUploader(
     private val dao: OrderFileDao,
     /** `/add` 响应的 `stockChanges` 是服务器那一刻的绝对库存，用它做一次不对称对账。 */
     private val stockLedger: StockLedger,
+    /**
+     * 本机设备 id。[uploadReady] 只自动上传 `originDevice` 等于它的行。
+     *
+     * ⚠ 空串也算本机：那是 v5 迁移之前的老行，本来就是这台设备自己开的。
+     */
+    private val deviceId: () -> String = { "" },
     private val audit: (String) -> Unit = {},
 ) {
 
@@ -183,10 +189,31 @@ class OutboxUploader(
     }
 
     /**
-     * 按 `createdAt` 顺序批量上传所有 `READY` 的行。
+     * 按 `createdAt` 顺序批量上传**本机创建的** `READY` 行。
      *
      * 顺序有意义：先开的单先上传，服务端文件里的行顺序就与开单顺序一致，
      * 对账时"文件尾部那几行"就是"最近开的那几单"。
+     *
+     * ## ⚠ 两道防跨设备重复上传的闸门
+     *
+     * 离线时两台设备会通过热点互相同步未上传的订单，于是双方手上都有同一批 uuid。
+     * 而服务端 `order_write.lua` 里**没有任何 uuid 去重**：重复上传返回 200、
+     * 追加为新行、**库存再扣一次**，镜像比服务器长、此后所有偏移静默错位 ——
+     * 等长覆写不报错、文件长度不变、校验和自洽，没有任何机制会发现。
+     *
+     * **闸门一：只挑本机单。** 别的设备传来的行 `originDevice` 是对方 id，
+     * 这里直接跳过 —— 正常情况下创建者自己会上传它。要接管得走
+     * [uploadOne]（「订单」页用户明确勾选时调那条路）。
+     *
+     * **闸门二：上传前先同步一次。** 这一步才是真正关掉竞态的：
+     * 如果对方已经把某几笔传上去了，同步会把它们建进 `order_index` →
+     * `applyAdded` → `promoteFromOutbox` → 本地那几行**变成 PROMOTED**，
+     * 于是下面重读时就看不到它们了。
+     *
+     * ⚠ 闸门二不是绝对的：两台设备**同时**同步、又都还没看到对方的上传时，
+     * 仍然会双双发出去。要彻底关死需要服务端支持幂等键（uuid 唯一约束），
+     * 而它现在没有。所以「订单」页把外部单单独分组、只允许手动上传 ——
+     * 让人而不是代码来做最后那个判断。
      */
     suspend fun uploadReady(
         storeKey: String,
@@ -194,9 +221,37 @@ class OutboxUploader(
         limit: Int = DEFAULT_BATCH,
     ): BatchReport {
         require(limit > 0) { "limit 必须为正，收到 $limit" }
+        val mine = deviceId()
+
         // outboxByState 的 SQL 已带 ORDER BY createdAt。
-        val rows = dao.outboxByState(storeKey, OrderOutboxEntity.READY)
-        if (rows.isEmpty()) return BatchReport()
+        val own = dao.outboxByState(storeKey, OrderOutboxEntity.READY).filter { it.isMine(mine) }
+        if (own.isEmpty()) return BatchReport()
+
+        // 闸门二：先把涉及的每个文件追平。按 fileId 分组，一个文件只同步一次
+        // （一次 FULL 可能是几 MB，而同一个月的十笔单共享同一个文件）。
+        for (fileId in own.map { OutboxContribution.partsOf(ownerName, it).fileId }.distinct()) {
+            val outcome = runCatching { syncFile(storeKey, fileId) }.getOrElse {
+                audit("上传前同步抛异常 fileId=$fileId：${it.message}（继续上传，竞态窗口会变大）")
+                null
+            }
+            // ⚠ 引擎**不抛异常**，失败是折进 Outcome 返回的（见 OrderFileSyncEngine.sync
+            // 的注释）。所以只看 runCatching 的 onFailure 等于永远不会告警 ——
+            // 而"没追平就上传"正是竞态窗口变大的那一刻，必须记下来。
+            if (outcome != null &&
+                outcome !is OrderFileSyncEngine.Outcome.UpToDate &&
+                outcome !is OrderFileSyncEngine.Outcome.Applied &&
+                outcome !is OrderFileSyncEngine.Outcome.Rebuilt
+            ) {
+                audit("上传前同步没追平 fileId=$fileId：$outcome（继续上传，竞态窗口会变大）")
+            }
+        }
+
+        // ⚠ 同步之后**必须重读**：刚被 promote 成 PROMOTED 的行不该再发一次。
+        val rows = dao.outboxByState(storeKey, OrderOutboxEntity.READY).filter { it.isMine(mine) }
+        if (rows.isEmpty()) {
+            audit("上传前同步之后 ${own.size} 笔本机单都已被别的设备传上去了，无需重发")
+            return BatchReport(promoted = own.size)
+        }
         val batch = if (rows.size > limit) rows.subList(0, limit) else rows
 
         var report = BatchReport(remaining = rows.size - batch.size)
@@ -300,6 +355,16 @@ class OutboxUploader(
     }
 
     // ==================== 内部 ====================
+
+    /**
+     * 这一行是不是本机创建的。
+     *
+     * ⚠ 空串**算本机**：那是 v5 迁移之前的老行，本来就是这台设备自己开的、
+     * 从来没有被别人同步走过。把空串当"外部"的话，升级之后用户自己开的单
+     * 会全部变成"来自其他设备"、永远不自动上传，而他明明记得是自己开的。
+     */
+    private fun OrderOutboxEntity.isMine(myDeviceId: String): Boolean =
+        originDevice.isEmpty() || originDevice == myDeviceId
 
     /**
      * 真正发 `/add` 并落地。**调用方必须保证行已经处于 `IN_FLIGHT`**（write-ahead）。

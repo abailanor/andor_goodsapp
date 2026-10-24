@@ -89,7 +89,7 @@ import com.example.myapplication.db.StoreMetaDao
         AdminCatalogItemEntity::class,
         AdminCatalogCursorEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(BigDecimalTypeConverter::class)
@@ -127,7 +127,7 @@ abstract class AppDatabase : RoomDatabase() {
                     DATABASE_NAME,
                 )
                     .setJournalMode(JournalMode.TRUNCATE)
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { INSTANCE = it }
             }

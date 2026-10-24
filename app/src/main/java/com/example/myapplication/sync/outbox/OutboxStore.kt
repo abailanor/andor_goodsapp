@@ -119,6 +119,15 @@ class OutboxStore(
     private val now: () -> Long = { System.currentTimeMillis() },
     /** 每块一个 uuid。**绝不让多块共用一个**，理由见 `OrderGroupAssembler.assemble` 的参数注释。 */
     private val uuidFactory: () -> String = { UUID.randomUUID().toString() },
+    /**
+     * 本机设备 id，写进每一行的 `originDevice`。
+     *
+     * ⚠ 默认空串只是为了让 JVM 测试不必构造一个 Android Context；
+     * 生产装配（`ServiceLocator.outboxStore`）**必须**传真实的 id，
+     * 否则所有行都看起来是"迁移前的老行"，热点同步过来的外部单与本机单
+     * 就分不开了 —— 而那正是要防的重复上传。
+     */
+    private val deviceId: () -> String = { "" },
     private val audit: (String) -> Unit = {},
 ) {
 
@@ -128,8 +137,16 @@ class OutboxStore(
             dao: OrderFileDao,
             timeZone: () -> TimeZone = { TimeZone.getDefault() },
             now: () -> Long = { System.currentTimeMillis() },
+            deviceId: () -> String = { "" },
             audit: (String) -> Unit = {},
-        ) = OutboxStore(dao, { body -> db.withTransaction { body() } }, timeZone, now, audit = audit)
+        ) = OutboxStore(
+            dao,
+            { body -> db.withTransaction { body() } },
+            timeZone,
+            now,
+            deviceId = deviceId,
+            audit = audit,
+        )
 
         /** `blockedReason` 的文案模板。UI 直接显示它，所以不要把条码列表塞进这一句里。 */
         fun blockedReason(count: Int) = "缺 $count 个商品的箱规，补齐后才能上传"
@@ -204,6 +221,9 @@ class OutboxStore(
                 totalCents = Money.toCents(c.draft.total),
                 itemCount = c.draft.items.size,
                 orderTs = req.ts,
+                // 这一行是**本机**开的。热点同步过来的外部单由接收侧写成对方的 id，
+                // 于是 `uploadReady` 能只挑本机单自动上传 —— 见 OutboxUploader。
+                originDevice = deviceId(),
             )
         }
 
