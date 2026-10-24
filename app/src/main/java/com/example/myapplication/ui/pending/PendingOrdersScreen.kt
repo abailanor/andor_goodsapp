@@ -15,6 +15,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.myapplication.data.PendingOrderFile
+import com.example.myapplication.ui.CurrentOrderMode
+import com.example.myapplication.ui.OrderMode
+import com.example.myapplication.ui.orderModeOf
 import com.example.myapplication.util.PriceFormatter
 
 
@@ -25,6 +28,8 @@ fun PendingOrdersScreen(
     onNavigateToOrder: () -> Unit
 ) {
     val pendingOrders by viewModel.pendingOrders.collectAsState()
+    val mode by CurrentOrderMode.mode.collectAsState()
+    val hasOtherMode by viewModel.hasOtherMode.collectAsState()
     val selectedOrder by viewModel.selectedOrder.collectAsState()
     val message by viewModel.message.collectAsState()
     val navigateToOrder by viewModel.navigateToOrder.collectAsState()
@@ -47,7 +52,9 @@ fun PendingOrdersScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("待开单") },
+                // ⚠ 标题带模式名：列表是过滤过的，用户必须知道"现在看到的是哪一种"。
+                // 只靠底色不够 —— 待开单页上方还有一条模式切换条，两者要一致才对得上。
+                title = { Text("待开单 · ${mode.label}") },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -84,10 +91,21 @@ fun PendingOrdersScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "暂无待开单",
+                        // ⚠ 带上模式名：列表是**按当前模式过滤**的，
+                        // 只说"暂无待开单"的话，用户在销售模式下看不到自己昨天挂的
+                        // 进货单，会以为丢了。上面那条模式切换条就是出口。
+                        text = "暂无${mode.label}待开单",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.outline
                     )
+                    if (hasOtherMode) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "另一种模式的待开单还在，用上面的开关切过去看",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
             }
         } else {
@@ -168,12 +186,34 @@ fun PendingOrderCard(
                         color = MaterialTheme.colorScheme.outline
                     )
                 }
-                Text(
-                    text = "¥${PriceFormatter.format(pendingOrderFile.record.totalPrice)}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
+                if (orderModeOf(pendingOrderFile.record.modeOrSale) == OrderMode.PURCHASE) {
+                    // ⚠ 进货单一律不显示金额，哪怕文件里存着数字（升级前存的那些）。
+                    // 那个数是拿**卖出价**算出来的，而服务端根本不存进货价 ——
+                    // 显示出来就是编的数字，还会让用户以为进货要付这么多钱。
+                    Text(
+                        text = "不计金额",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                } else {
+                if (orderModeOf(pendingOrderFile.record.modeOrSale) == OrderMode.PURCHASE) {
+                    // ⚠ 进货单一律不显示金额，哪怕文件里存着数字（升级前存的那些就有）。
+                    // 那个数是拿**卖出价**算的，而服务端根本不存进货价 ——
+                    // 显示出来就是编的，还会让人以为进货要付这么多钱。
+                    Text(
+                        text = "不计金额",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                } else {
+                    Text(
+                        text = "¥${PriceFormatter.format(pendingOrderFile.record.totalPrice)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                }
             }
 
             Row(
@@ -252,6 +292,9 @@ fun OrderPreviewDialog(
     onDismiss: () -> Unit,
     onOpen: () -> Unit
 ) {
+    // 进货单：全程不出现金额（理由同 PendingOrderCard 里那条注释）。
+    val purchase = orderModeOf(orderItem.record.modeOrSale) == OrderMode.PURCHASE
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -267,7 +310,7 @@ fun OrderPreviewDialog(
             ) {
                 // 标题栏
                 TopAppBar(
-                    title = { Text("订单预览") },
+                    title = { Text(if (purchase) "进货单预览" else "订单预览") },
                     navigationIcon = {
                         IconButton(onClick = onDismiss) {
                             Icon(Icons.Default.Close, contentDescription = "关闭")
@@ -329,17 +372,20 @@ fun OrderPreviewDialog(
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
-                                        text = "¥${PriceFormatter.format(item.product.price)} × ${item.quantity}",
+                                        text = if (purchase) "× ${item.quantity}"
+                                        else "¥${PriceFormatter.format(item.product.price)} × ${item.quantity}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.outline
                                     )
                                 }
-                                Text(
-                                    text = "¥${PriceFormatter.format(item.subtotal)}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                                if (!purchase) {
+                                    Text(
+                                        text = "¥${PriceFormatter.format(item.subtotal)}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
                         }
                     }
@@ -359,14 +405,16 @@ fun OrderPreviewDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "合计",
+                            text = if (purchase) "共 ${orderItem.record.items.size} 项" else "合计",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "¥${PriceFormatter.format(orderItem.record.totalPrice)}",
+                            text = if (purchase) "不计金额"
+                            else "¥${PriceFormatter.format(orderItem.record.totalPrice)}",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            color = if (purchase) MaterialTheme.colorScheme.outline
+                            else MaterialTheme.colorScheme.primary
                         )
                     }
                 }

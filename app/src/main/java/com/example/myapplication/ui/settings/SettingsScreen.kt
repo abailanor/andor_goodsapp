@@ -68,6 +68,14 @@ class SettingsViewModel(private val settings: SettingsStore) : ViewModel() {
      */
     fun setCountFailedInRevenue(on: Boolean) = mutate { it.copy(countFailedOrdersInRevenue = on) }
 
+    /**
+     * 本店用不用整箱这个单位。
+     *
+     * ⚠ 关掉**不删数据**：已填的 `boxPrice` / `boxSize` 还在库里，只是界面不再显示、
+     * 开单不再按箱算。删数据的话用户只是想"暂时不看这个框"就会永久丢掉整箱价。
+     */
+    fun setEnableBoxSelling(on: Boolean) = mutate { it.copy(enableBoxSelling = on) }
+
     private fun mutate(block: (AppSettings) -> AppSettings) {
         // mutate 是 suspend 的（DataStore 每次写都重写整个文件），不能在主线程直接调
         viewModelScope.launch { settings.mutate(block) }
@@ -131,6 +139,26 @@ fun SettingsScreen(viewModel: SettingsViewModel, shopName: String?, onSync: () -
                 Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+        Section("开单")
+        SwitchRow("本店按整箱卖", s.enableBoxSelling) { viewModel.setEnableBoxSelling(it) }
+        Text(
+            if (s.enableBoxSelling) {
+                "开着：商品可以填整箱价与箱规，开单页每行多一个「件」输入框，" +
+                    "整箱优惠会自动算进金额并在小票上单列一行。"
+            } else {
+                "关着：商品表单不显示整箱价与箱规，开单页只有「个」一个输入框。" +
+                    "已经填过的整箱价**不会丢**，重新打开就还在。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "改动立刻生效：开单页每次进入组合时都会重读这个设置。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Spacer(Modifier.height(16.dp))
         Section("统计")

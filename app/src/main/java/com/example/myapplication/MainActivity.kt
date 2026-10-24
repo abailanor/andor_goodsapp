@@ -24,6 +24,7 @@ import com.example.myapplication.data.PendingOrderLoader
 import com.example.myapplication.data.ProductRepository
 import com.example.myapplication.data.SessionRepository.SessionState
 import com.example.myapplication.ui.ModeSwitchBar
+import com.example.myapplication.ui.orderModeOf
 import com.example.myapplication.ui.ai.AIScreen
 import com.example.myapplication.ui.ai.AIViewModel
 import com.example.myapplication.ui.history.OrderHistoryScreen
@@ -196,11 +197,20 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                 // 检查是否有待加载的待开单数据
                 LaunchedEffect(Unit) {
                     if (PendingOrderLoader.hasData()) {
-                        val (items, fileName, targetOrder) = PendingOrderLoader.consume()
+                        val req = PendingOrderLoader.consume()
+                        val items = req.items
+                        val fileName = req.sourceFileName
                         if (items != null && fileName != null) {
-                            // 先清除当前订单，再加载新订单
-                            viewModel.clearOrder()
-                            viewModel.loadPendingOrderItems(items, fileName, targetOrder)
+                            // ⚠ 这里**不再**先调 clearOrder()：两辆车之后，clearOrder 清的是
+                            // "当前模式"那辆，而要加载的待开单可能是另一个模式 ——
+                            // 结果是白扔掉用户正在开的销售单，进货车反而是脏的。
+                            // loadPendingOrderItems 内部会先切模式、再整体覆盖那辆车。
+                            viewModel.loadPendingOrderItems(
+                                items = items,
+                                sourceFileName = fileName,
+                                targetFileName = req.targetOrder,
+                                mode = orderModeOf(req.mode),
+                            )
                         }
                     }
                 }
@@ -212,6 +222,8 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                     // 不转发的话底色变了、车没换，用户看到的还是销售单的内容。
                     ModeSwitchBar(onModeChanged = { viewModel.setMode(it) })
                     Box(Modifier.weight(1f)) {
+                        // ⚠ 每次重组都重新读设置：用户在设置里改完切回来，
+                        // 开单页要立刻显示/隐藏「件」输入框。remember 住就会用到旧值。
                         val s by locator.settings.settings.collectAsState()
                         OrderScreen(
                             viewModel = viewModel,
@@ -219,6 +231,7 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                             printShopName = s.printShopName,
                             printShopPhone = s.printShopPhone,
                             printShopAddress = s.printShopAddress,
+                            enableBoxSelling = s.enableBoxSelling,
                         )
                     }
                 }
@@ -231,7 +244,9 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
 
             composable(Screen.ProductManagement.route) {
                 val viewModel = viewModel<ProductViewModel>(factory = ProductViewModelFactory(repository))
-                ProductManagementScreen(viewModel = viewModel)
+                // ⚠ 每次重组都重新读设置：用户在设置里改完切回来，这一页要立刻生效
+                val boxEnabled by locator.settings.settings.collectAsState()
+                ProductManagementScreen(viewModel = viewModel, enableBoxSelling = boxEnabled.enableBoxSelling)
             }
 
             composable(Screen.Stats.route) {

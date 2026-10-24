@@ -19,10 +19,24 @@ data class OrderLine(
      * 所以 items 里**不需要**存箱数。箱/个的拆分只是开单页的录入便利。
      */
     val quantity: Int,
-    /** 该条总价，**字符串**（避免 `12.5` / `12.50` 的精度与序列化差异，README §2.3）。 */
-    val amount: String,
     /**
-     * 该行的**单个零售价**，字符串。
+     * 该条总价，**字符串**（避免 `12.5` / `12.50` 的精度与序列化差异，README §2.3）。
+     *
+     * ## null = 这一行**不带金额**，字段整个不写
+     *
+     * 只有 A 类（进货）订单是 null。理由不是省字节：
+     * **服务端根本不存储买入价**（README §6.2「目录不含进货价」），本地目录里的 `price`
+     * 是**卖出价**。拿卖出价给进货行标金额，等于把一个编出来的数字永久写进镜像文件 ——
+     * 而 `content` 是变长字段、上传后**再也改不了**（补丁只能等长覆写 `status` 那一个字节）。
+     * 半年后 nobody 能分清那个数字是进价还是售价。
+     *
+     * ⚠ 与 [unitPrice] 必须**同时**有或同时无，[OrderDraft.total] 也一样。
+     * [serialize] 会拦混用：半张单带价、半张不带，读回来时 `Σ items.amount ≠ total`
+     * 会被误判成"含手工调整"。
+     */
+    val amount: String?,
+    /**
+     * 该行的**单个零售价**，字符串。null 的语义同 [amount]（A 类订单不写）。
      *
      * ## ⚠ 它不是可选装饰，所以声明成非空
      *
@@ -45,7 +59,7 @@ data class OrderLine(
      * 那种情况下折扣行**不显示**（与"折扣 ≤ 0 就不显示"是同一条规则），
      * 而**绝不能**拿当前目录价去补 —— 那会让一张历史小票的金额随着后来改价而改变。
      */
-    val unitPrice: String,
+    val unitPrice: String?,
     /** A 类订单额外带 `productName`（总部版要显示）；B 类为 null。 */
     val productName: String? = null,
 )
@@ -57,15 +71,18 @@ data class OrderDraft(
     val writer: String,
     val items: List<OrderLine>,
     /**
-     * 权威总额，字符串。
+     * 权威总额，字符串。**null = 整个 `total` 字段不写**（A 类进货单）。
      *
      * README §2.3 说的"不记总额"是指**服务器**不算不存；`content` 是任意 JSON、
      * 服务端原样落盘，客户端放总额不违反协议。
      *
      * 读取时若 `Σ items.amount != total`，UI 要打"含手工调整"标记，**不静默取其一**；
      * 统计一律用 `total`（手动覆盖发生在总额层）。
+     *
+     * ⚠ null 的理由与 [OrderLine.amount] 完全一样：进货价不存在，写进去就是编数字。
+     * 读回来的订单 `total == null` 时统计**跳过**它，不能当 0 —— A 类本来就不计营收。
      */
-    val total: String,
+    val total: String?,
     /**
      * 客户端 epoch millis。**协议本身没有订单时间字段**，而 FULL 恢复的订单拿不到
      * 流消息里的 `timestamp`，所以必须自带，否则按日/月统计无从下手。
@@ -154,6 +171,22 @@ object StableOrderJson {
         draft.items.forEach {
             require(it.barcode.isNotBlank()) { "items[].barcode 不能为空（服务端校验）" }
             require(it.quantity > 0) { "items[].quantity 必须是正整数（服务端校验），实际 ${it.quantity}" }
+            require((it.amount == null) == (it.unitPrice == null)) {
+                "amount 与 unitPrice 必须同时有或同时无：barcode=${it.barcode} " +
+                    "amount=${it.amount} unitPrice=${it.unitPrice}"
+            }
+        }
+        // 金额字段**整单**全有或全无。半张单带价的话，读回来 `Σ items.amount != total`
+        // 会被 OrderPayloadIndex 判成"含手工调整"，而那是编出来的标记。
+        val pricedCount = draft.items.count { it.amount != null }
+        require(pricedCount == 0 || pricedCount == draft.items.size) {
+            "金额字段必须整单一致：${pricedCount}/${draft.items.size} 行带 amount。" +
+                "B 类销售单每行都带，A 类进货单一行都不带（见 OrderLine.amount 的注释）"
+        }
+        val priced = pricedCount == draft.items.size
+        require((draft.total != null) == priced) {
+            if (priced) "带金额的行必须有 content.total（统计一律读 total）"
+            else "A 类进货单不该带 content.total —— 那个数只能是用卖出价编出来的"
         }
         require(draft.status.toString().length == 1) {
             "status 必须恰为一个数字字符（服务端校验），实际 ${draft.status}"
@@ -198,16 +231,22 @@ object StableOrderJson {
             }
             raw(",\"quantity\":")
             raw(it.quantity.toString())
-            raw(",\"amount\":")
-            str(it.amount)
-            // 每行都写。字段顺序固定（barcode, name, [productName], quantity, amount, unitPrice），
+            // 字段顺序固定（barcode, name, [productName], quantity, [amount, unitPrice]），
             // 与 Python 参照实现的 dict 插入顺序逐一对应 —— 顺序差一位，SHA-256 就对不上了。
-            raw(",\"unitPrice\":")
-            str(it.unitPrice)
+            // A 类（进货）两个金额字段都不写，见 OrderLine.amount 的注释。
+            if (it.amount != null) {
+                raw(",\"amount\":")
+                str(it.amount)
+                raw(",\"unitPrice\":")
+                str(it.unitPrice!!)
+            }
             raw("}")
         }
-        raw("],\"total\":")
-        str(draft.total)
+        raw("]")
+        if (draft.total != null) {
+            raw(",\"total\":")
+            str(draft.total)
+        }
         raw(",\"ts\":")
         raw(draft.ts.toString())
         raw("},\"status\":")
@@ -319,9 +358,13 @@ object StableOrderJson {
         var n = ByteOps.utf8Len("{\"barcode\":") + 2 + ByteOps.utf8Len(escape(line.barcode))
         n += ByteOps.utf8Len(",\"name\":") + 2 + ByteOps.utf8Len(escape(line.name))
         n += ByteOps.utf8Len(",\"quantity\":") + line.quantity.toString().length
-        n += ByteOps.utf8Len(",\"amount\":") + 2 + ByteOps.utf8Len(escape(line.amount))
-        // unitPrice 现在每行都写（见 OrderLine.unitPrice 的注释），所以这里不再有条件
-        n += ByteOps.utf8Len(",\"unitPrice\":") + 2 + ByteOps.utf8Len(escape(line.unitPrice))
+        // A 类（进货）两个金额字段都不写 —— 少约 30 字节/行，同样行数下能装更多行。
+        line.amount?.let {
+            n += ByteOps.utf8Len(",\"amount\":") + 2 + ByteOps.utf8Len(escape(it))
+        }
+        line.unitPrice?.let {
+            n += ByteOps.utf8Len(",\"unitPrice\":") + 2 + ByteOps.utf8Len(escape(it))
+        }
         if (line.productName != null) {
             n += ByteOps.utf8Len(",\"productName\":") + 2 + ByteOps.utf8Len(escape(line.productName))
         }

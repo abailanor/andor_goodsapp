@@ -218,7 +218,11 @@ class OutboxStore(
                 pricedAt = at,
                 createdAt = at,
                 writer = req.writer,
-                totalCents = Money.toCents(c.draft.total),
+                // A 类进货单没有 total（见 OrderDraft.total 的注释），存 0。
+                // ⚠ 这个 0 **不参与统计**：OutboxContribution.of → StatsProjection.contributionOf
+                // 对 `!parts.isB` 直接返回空列表。UI 显示金额时必须先看 fileType，
+                // 不能把 0 印成 "¥0.00" —— 那是"这一单免费"的意思，而进货单根本不该有金额。
+                totalCents = c.draft.total?.let(Money::toCents) ?: 0L,
                 itemCount = c.draft.items.size,
                 orderTs = req.ts,
                 // 这一行是**本机**开的。热点同步过来的外部单由接收侧写成对方的 id，

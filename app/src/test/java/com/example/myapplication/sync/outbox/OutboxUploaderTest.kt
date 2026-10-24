@@ -171,6 +171,13 @@ class OutboxUploaderTest {
         amount: String = "52.00",
     ) = OrderLine(barcode, name, qty, amount, "1.00")
 
+    /** 进货行：**不带金额**（A 类的 amount/unitPrice 都是 null，见 StableOrderJson）。 */
+    private fun purchaseLine(
+        barcode: String = cola,
+        name: String = "可口可乐330ml",
+        qty: Int = 14,
+    ) = OrderLine(barcode, name, qty, amount = null, unitPrice = null)
+
     private fun req(
         fileType: String = OrderFileId.TYPE_B,
         year: Int = 2026,
@@ -321,7 +328,8 @@ class OutboxUploaderTest {
     @Test
     fun `A_类订单的_month_传_null_而不是_0`() {
         // A 类没有月份，而服务端 validateTypeAndMonth 对 month<1||month>12 直接 400
-        val uuid = newOrder(req(fileType = OrderFileId.TYPE_A, month = null, remarkText = "进货一批"))
+        val uuid = newOrder(req(fileType = OrderFileId.TYPE_A, month = null, remarkText = "进货一批",
+            lines = listOf(purchaseLine())))
         val aFileId = OrderFileId.Parts(OrderFileId.TYPE_A, ownerName, 2026, OrderFileId.NO_MONTH).fileId
         serveAdd(fileId = aFileId)
 

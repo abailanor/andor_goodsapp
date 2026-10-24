@@ -120,6 +120,14 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
         sellsByBox: Boolean,
         boxPrice: String,
         boxSize: String,
+        /**
+         * `sellsByBox == false` 时**保留**已有行的 `boxPrice` / `boxSize`，不清成 null/0。
+         *
+         * 用于"全局关掉了整箱"这种情况：用户只是想暂时不看那两个框，
+         * 不是想丢掉已经填好的整箱价。清掉的话重新打开设置，数据就没了 ——
+         * 而用户会以为是自己记错了。
+         */
+        preserveExistingBox: Boolean = false,
         onSuccess: () -> Unit = {},
     ) {
         viewModelScope.launch {
@@ -139,8 +147,9 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
                     return@launch
                 }
 
-                var boxPriceValue: BigDecimal? = null
-                var boxSizeValue = 0
+                val existingForBox = if (preserveExistingBox) repository.getProductByBarcode(code) else null
+                var boxPriceValue: BigDecimal? = existingForBox?.boxPrice
+                var boxSizeValue = existingForBox?.boxSize ?: 0
                 if (sellsByBox) {
                     boxPriceValue = parsePrice(boxPrice)
                     if (boxPriceValue == null) {
@@ -196,13 +205,13 @@ class ProductViewModel(private val repository: ProductRepository) : ViewModel() 
         if (query.isBlank()) {
             return emptyList()
         }
-        if(query.matches(Regex("\\d+"))){
-            if(query.length<13){
-                return emptyList()
-            }
-            else{
-               return _products.value.filter { it.barcode.contains(query) }
-            }
+        if (query.matches(Regex("\\d+"))) {
+            // ⚠ 原来要求 `length >= 13` 才按条码查，于是 12 位条码（UPC-A）、
+            // 8 位的店内码、以及扫到一半的输入一律返回空 —— 用户看到的是
+            // "明明有这个商品却搜不出来"，而原因藏在一个长度判断里。
+            // 门槛降到 4：再低的话输一个 "1" 会把半个目录都列出来。
+            if (query.length < 4) return emptyList()
+            return _products.value.filter { it.barcode.contains(query) }
         }
         val tokens = splitQueryIntoTokens(query)
         return _products.value.filter {

@@ -111,10 +111,22 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
         // 汇总条。有未上传的单时**必须显眼**：那是钱还没进账、而且只有这台设备知道。
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp)) {
+                // ⚠ 进货单没有金额（payload 里根本没有 total 字段），所以筛到「进货」时
+                // 汇总的是**件数**而不是钱。继续显示 ¥0.00 的话，用户会以为
+                // "这个月进了 30 笔货、一分钱没花" —— 而那个 0 只是"没有这个数"。
+                val purchaseOnly = fileType == OrderFileId.TYPE_A
                 Text(
                     buildString {
                         append("${rows.size} 笔 · ")
-                        append(Money.fromCents(rows.sumOf { if (it.status == 1) it.totalCents else 0L }))
+                        if (purchaseOnly) {
+                            append(
+                                rows.filter { it.status == 1 }
+                                    .sumOf { it.itemCount }.toString()
+                            ).append(" 件")
+                        } else {
+                            // 「全部」时也把钱加起来：A 类的 totalCents 恒为 0，不影响结果。
+                            append(Money.fromCents(rows.sumOf { if (it.status == 1) it.totalCents else 0L }))
+                        }
                         if (pending > 0) append(" · 未上传 $pending 笔")
                     },
                     style = MaterialTheme.typography.titleMedium,
@@ -419,14 +431,25 @@ private fun OrderRowView(
 
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    Money.fromCents(row.totalCents),
-                    style = MaterialTheme.typography.titleMedium,
-                    // 已取消的单划线而不是隐藏：库存回退了、营收也不算了，
-                    // 但用户需要看得见"这一笔发生过又被撤了"。
-                    color = if (row.status == 0) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.onSurface,
-                )
+                // ⚠ 进货单（A 类）显示"不计金额"而不是 ¥0.00：它的 totalCents 恒为 0
+                // （payload 里根本没有 total 字段，见 OrderDraft.total），
+                // 而 "¥0.00" 读起来是"这一单免费"—— 进货单压根不该有金额。
+                if (row.fileType == OrderFileId.TYPE_A) {
+                    Text(
+                        "不计金额",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        Money.fromCents(row.totalCents),
+                        style = MaterialTheme.typography.titleMedium,
+                        // 已取消的单划线而不是隐藏：库存回退了、营收也不算了，
+                        // 但用户需要看得见"这一笔发生过又被撤了"。
+                        color = if (row.status == 0) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 if (row.status == 0) {
                     Spacer(Modifier.width(6.dp))
                     Badge("已取消")

@@ -24,8 +24,22 @@ data class PendingOrderRecord(
     val createdAt: Long,
     val fileName: String,
     val totalPrice: String,
-    val items: List<PendingOrderLine>
-)
+    val items: List<PendingOrderLine>,
+    /**
+     * `"SALE"` / `"PURCHASE"`（`OrderMode` 的 name）。
+     *
+     * ⚠ 声明成**可空**而不是给默认值 `"SALE"`：Gson 反序列化 Kotlin data class 走的是
+     * `Unsafe.allocateInstance`，**不调用构造函数**，所以 JSON 里缺这个字段时它是 null
+     * 而不是 Kotlin 的默认值。写成非空 + 默认值的话，读旧文件会得到一个类型上"非空"、
+     * 运行时是 null 的字段 —— 用的时候才 NPE，而且堆栈指向别处，很难查。
+     *
+     * null = 升级前存的旧文件，按销售单处理（那时还没有进货模式）。
+     */
+    val mode: String? = null,
+) {
+    /** null 安全地取模式。旧文件（没有这个字段）算销售单。 */
+    val modeOrSale: String get() = mode ?: "SALE"
+}
 
 data class PendingOrderFile(
     val file: File,
@@ -46,9 +60,17 @@ class PendingOrderStorage(private val context: Context) {
      * @param orderItems 订单项列表
      * @param totalPrice 总价字符串
      * @param customFileName 自定义文件名（可选，为null时自动生成）
+     * @param mode `"SALE"` / `"PURCHASE"`。⚠ 必须存：待开单页要按模式分开列，
+     *        而加载回开单页时也要**先切到对应的模式**再放购物车 ——
+     *        否则进货单会被塞进销售车，用户看到的是一张有价格的进货单。
      * @return 保存的文件信息
      */
-    fun savePendingOrder(orderItems: List<OrderItem>, totalPrice: String, customFileName: String? = null): PendingOrderFile {
+    fun savePendingOrder(
+        orderItems: List<OrderItem>,
+        totalPrice: String,
+        customFileName: String? = null,
+        mode: String = "SALE",
+    ): PendingOrderFile {
         val now = Date()
         val lines = orderItems.map {
             PendingOrderLine(
@@ -68,7 +90,8 @@ class PendingOrderStorage(private val context: Context) {
             createdAt = now.time,
             fileName = fileName,
             totalPrice = totalPrice,
-            items = lines
+            items = lines,
+            mode = mode,
         )
 
         val file = File(baseDir(), fileName)

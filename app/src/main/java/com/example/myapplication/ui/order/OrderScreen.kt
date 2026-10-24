@@ -64,12 +64,19 @@ fun OrderScreen(
     printShopName: String = "",
     printShopPhone: String = "",
     printShopAddress: String = "",
+    /**
+     * 本店用不用整箱（`AppSettings.enableBoxSelling`）。
+     *
+     * ⚠ 必须是**每次重组都重新读**的值，不能 remember 住：用户在设置里改完切回来，
+     * 这一页要立刻按新设置显示或隐藏「件」输入框。
+     */
+    enableBoxSelling: Boolean = true,
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val orderItems by viewModel.orderItems.collectAsState()
     val message by viewModel.message.collectAsState()
-    val sourcePendingFileName by viewModel.sourcePendingFileName.collectAsState()
+    val sourcePendingFileName by viewModel.sourcePendingFileName.collectAsState(initial = null)
     val searchResults by viewModel.searchResults.collectAsState()
     val soundEnabled by viewModel.soundEnabled.collectAsState()
     val mode by viewModel.mode.collectAsState()
@@ -447,6 +454,7 @@ fun OrderScreen(
                             onSinglesChange = { viewModel.updateSingles(item.product.barcode, it) },
                             onRemove = { viewModel.removeItem(item.product.barcode) },
                             mode = mode,
+                            enableBoxSelling = enableBoxSelling,
                         )
                     }
                 }
@@ -739,6 +747,13 @@ fun OrderItemCard(
     modifier: Modifier = Modifier,
     /** 进货模式下这一行**不显示任何金额**，见下面的注释。 */
     mode: OrderMode = OrderMode.SALE,
+    /**
+     * 本店用不用整箱（`AppSettings.enableBoxSelling`）。
+     *
+     * 关着就只显示「个」一个框。⚠ 进货模式**一律**不显示「件」框：
+     * 进货的最小单位就是"个"，而且系统里没有买入价，按箱算不出任何东西。
+     */
+    enableBoxSelling: Boolean = true,
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -803,9 +818,13 @@ fun OrderItemCard(
             )
 
             // 「件」+「个」两个框。
-            // ⚠ 不按整箱卖的商品（boxPrice == null）**不显示「件」框** ——
-            // 摆一个填了也没用的框，用户会以为整箱价生效了，而实际按散卖算。
-            if (line.product.boxPrice != null) {
+            //
+            // ⚠ 两个条件都要满足才显示「件」：
+            //  1. 全局设置开着整箱（`AppSettings.enableBoxSelling`）—— 大多数店根本不按整箱卖，
+            //     多一个用不上的框就是在抢收银台上按秒计算的横向空间；
+            //  2. 这个商品**确实**有整箱价（`boxPrice != null`）—— 摆一个填了也没用的框，
+            //     用户会以为整箱价生效了，而实际按散卖算。
+            if (enableBoxSelling && mode == OrderMode.SALE && line.product.boxPrice != null) {
                 CountField(value = line.boxes, label = "件", onChange = onBoxesChange)
             }
             CountField(value = line.singles, label = "个", onChange = onSinglesChange)

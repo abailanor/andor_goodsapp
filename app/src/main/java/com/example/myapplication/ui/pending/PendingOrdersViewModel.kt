@@ -10,9 +10,15 @@ import com.example.myapplication.data.PendingOrderLoader
 import com.example.myapplication.data.PendingOrderRecord
 import com.example.myapplication.data.PendingOrderStorage
 import com.example.myapplication.data.ProductRepository
+import com.example.myapplication.ui.CurrentOrderMode
+import com.example.myapplication.ui.orderModeOf
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -35,8 +41,32 @@ class PendingOrdersViewModel(
 
     private val storage = PendingOrderStorage(context)
 
-    private val _pendingOrders = MutableStateFlow<List<PendingOrderFile>>(emptyList())
-    val pendingOrders: StateFlow<List<PendingOrderFile>> = _pendingOrders.asStateFlow()
+    /** 磁盘上的全部待开单（两种模式混在一起）。UI 不直接看这个。 */
+    private val _allPending = MutableStateFlow<List<PendingOrderFile>>(emptyList())
+
+    /**
+     * **只显示当前模式**的待开单。
+     *
+     * ⚠ 必须过滤，不能全列：进货单和销售单的行内容不兼容（进货不算金额），
+     * 混在一个列表里点「开单」会把进货单塞进销售车，上传出去就是一笔
+     * 计营收、扣库存的 B 类订单 —— 正好是进货单不该做的两件事。
+     */
+    val pendingOrders: StateFlow<List<PendingOrderFile>> =
+        combine(_allPending, CurrentOrderMode.mode) { all, mode ->
+            all.filter { orderModeOf(it.record.modeOrSale) == mode }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * 另一种模式下**还有**待开单。
+     *
+     * 过滤之后必须能解释"我明明挂了一张，怎么不见了"。少了这一条，
+     * 用户在销售模式下看不到昨天挂的进货单，只会以为它丢了 —— 而"以为丢单"
+     * 比真的丢单更难查，因为磁盘上的文件其实好好的。
+     */
+    val hasOtherMode: StateFlow<Boolean> =
+        combine(_allPending, CurrentOrderMode.mode) { all, mode ->
+            all.any { orderModeOf(it.record.modeOrSale) != mode }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     private val _selectedOrder = MutableStateFlow<PendingOrderItem?>(null)
     val selectedOrder: StateFlow<PendingOrderItem?> = _selectedOrder.asStateFlow()
@@ -63,7 +93,7 @@ class PendingOrdersViewModel(
     fun loadPendingOrders() {
         viewModelScope.launch {
             val files = storage.listAll()
-            _pendingOrders.value = files
+            _allPending.value = files
         }
     }
 
@@ -117,6 +147,11 @@ class PendingOrdersViewModel(
                 PendingOrderLoader.orderItems = orderItems
                 PendingOrderLoader.sourceFileName = pendingOrderFile.record.fileName
                 PendingOrderLoader.targetOrder = pendingOrderFile.record.fileName
+                // ⚠ 模式必须一起传过去：开单页要**先切模式再放购物车**。
+                // 少了它，进货单会被塞进销售车，上传出去是一张计营收、扣库存的 B 类单。
+                PendingOrderLoader.mode = pendingOrderFile.record.modeOrSale
+                // ⚠ 模式必须跟着走：开单页要**先切模式再放购物车**。
+                PendingOrderLoader.mode = pendingOrderFile.record.modeOrSale
 
                 // 添加小延迟确保数据设置完成
                 kotlinx.coroutines.delay(50)

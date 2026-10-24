@@ -151,6 +151,8 @@ class SettingsStoreTest {
             // 就算 writeAll 漏了这一项，读回来也是 true，测试照样绿 ——
             // 而"营业额算不算上传失败的单"这个开关会静默失效，用户切了没反应。
             countFailedOrdersInRevenue = false,
+            // 同样必须设成非默认值（默认 true），否则漏写 writeAll 也测不出来
+            enableBoxSelling = false,
             backgroundMode = BackgroundMode.PERSISTENT_SERVICE,
             printBarcode = false,
             printShopName = "丽华金龙",

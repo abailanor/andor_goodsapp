@@ -45,6 +45,16 @@ enum class OrderMode(val label: String) {
 }
 
 /**
+ * 把存储里的模式字符串还原成枚举。
+ *
+ * ⚠ 认不出的一律当 [OrderMode.SALE]，**不抛异常**：待开单是本机 JSON 文件，
+ * 升级前存的那些根本没有 `mode` 字段（null），而那时确实只有销售单。
+ * 用 `valueOf` 的话，一个脏文件就能让整条 Flow 的 collector 崩掉。
+ */
+fun orderModeOf(name: String?): OrderMode =
+    if (name == OrderMode.PURCHASE.name) OrderMode.PURCHASE else OrderMode.SALE
+
+/**
  * 当前开单模式。**进程级单例**，与 [com.example.myapplication.db.CurrentStore] 同一个理由：
  * 整条装配链都是手工的（没有 DI 框架），做成构造参数要改一大片签名，
  * 而它的语义本来就是"整个 App 现在处于哪个模式"。

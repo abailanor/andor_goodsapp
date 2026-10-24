@@ -37,6 +37,26 @@ class StableOrderJsonTest {
         remark = remark,
     )
 
+    /**
+     * A 类（进货）用的 draft：**一个金额字段都没有**。
+     *
+     * ⚠ 不能复用 [draft] 再把 total 设成 null —— `serialize` 要求"金额字段整单全有或全无"，
+     * 半张带价的单会被 require 拦下来（那正是它该拦的东西）。
+     */
+    private fun purchaseDraft(
+        items: List<OrderLine> = listOf(
+            OrderLine("6901234567890", "可口可乐330ml", 14, amount = null, unitPrice = null)
+        ),
+        remark: String? = null,
+    ) = OrderDraft(
+        orderUuid = uuid,
+        writer = "alice",
+        items = items,
+        total = null,
+        ts = 1_758_000_000_000L,
+        remark = remark,
+    )
+
     private fun json(s: SerializedOrder) = String(s.payload, Charsets.UTF_8)
 
     // ==================== 字段顺序：order_uuid 必须第一 ====================
@@ -433,6 +453,94 @@ class StableOrderJsonTest {
         // ,"remark":"  = 10 + 1 = 11 字节，值 150 字节，收尾引号 1 字节 → 共 162
         assertEquals(150 + ByteOps.utf8Len(",\"remark\":\"\""), withRemark - noRemark)
         assertEquals(162, withRemark - noRemark)
+    }
+
+    // ==================== A 类：金额字段一个都不写 ====================
+
+    @Test
+    fun `A_类_payload_不含_amount_unitPrice_total_三个键`() {
+        // 服务端不存买入价（README §6.2），本地 `price` 是**卖出价**。
+        // 拿它给进货行标金额 = 把编出来的数字永久写进镜像，而 content 上传后改不了。
+        val j = json(StableOrderJson.serialize(purchaseDraft(remark = ByteOps.padRemark("进货"))))
+        assertFalse(j.contains("\"amount\""))
+        assertFalse(j.contains("\"unitPrice\""))
+        assertFalse(j.contains("\"total\""))
+        // 该有的字段一个都不能少
+        assertTrue(j.startsWith("""{"order_uuid":"$uuid""""))
+        assertTrue(j.contains("\"content\":{\"items\":[{\"barcode\":"))
+        assertTrue(j.contains(",\"ts\":1758000000000"))
+        assertTrue(j.contains(",\"status\":1"))
+        assertTrue(j.contains(",\"remark\":"))
+    }
+
+    @Test
+    fun `A_类_payload_仍是合法_JSON_且能被_OrderPayloadIndex_读回`() {
+        // 少写三个键最容易犯的错是逗号：`{"quantity":14,}` 或 `{"items":[],"ts"}` 之类。
+        // Gson 对尾随逗号是宽容的，所以只靠"能解析"不够 —— 偏移也要对得上。
+        val s = StableOrderJson.serialize(purchaseDraft(remark = ByteOps.padRemark("进货")))
+        val parsed = com.example.myapplication.sync.OrderPayloadIndex.parse(s.payload)
+        assertNotNull("A 类 payload 解析不回来：${json(s)}", parsed)
+        assertEquals(1, parsed!!.items.size)
+        assertEquals(14, parsed.items[0].quantity)
+        assertNull("A 类没有 unitPrice，读回来必须是 null 而不是 0（0 会被当成\"这行免费\"）",
+            parsed.items[0].unitPriceCents)
+        assertEquals(0L, parsed.totalCents)
+        assertFalse("没有金额可覆盖，不该被打上\"含手工调整\"标记", parsed.manualTotal)
+        // 偏移自校验：按记录的下标读回来必须正是那个值
+        // 下标是**字节**下标，而 String 的下标是码点 —— 中文备注让两者不等。
+        // 直接在 payload 字节上读，才是与服务器对齐的那套算法。
+        assertEquals(
+            uuid,
+            String(s.payload, s.uuidValueByteIndex, 36, Charsets.UTF_8),
+        )
+        assertEquals('1'.code.toByte(), s.payload[s.statusValueByteIndex])
+    }
+
+    @Test
+    fun `半张单带金额必须被拒绝`() {
+        // 混着的后果是读回来 `Σ items.amount != total`，被 OrderPayloadIndex 判成"含手工调整"，
+        // 而那是编出来的标记 —— 它会指向一个根本不存在的手工改价。
+        val mixed = purchaseDraft(
+            items = listOf(
+                OrderLine("6901234567890", "可口可乐330ml", 14, amount = null, unitPrice = null),
+                OrderLine("6901234567891", "雪碧330ml", 7, amount = "21.00", unitPrice = "3.00"),
+            )
+        )
+        try {
+            StableOrderJson.serialize(mixed)
+            fail("一半行带金额、一半不带，必须抛")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("整单一致"))
+        }
+    }
+
+    @Test
+    fun `行带金额却没有_total_必须被拒绝`() {
+        val noTotal = OrderDraft(
+            orderUuid = uuid, writer = "alice",
+            items = listOf(OrderLine("6901234567890", "可口可乐330ml", 14, "52.00", "1.00")),
+            total = null, ts = 1_758_000_000_000L,
+        )
+        try {
+            StableOrderJson.serialize(noTotal)
+            fail("统计一律读 content.total，缺了它就会退化成明细求和，手工抹零被静默丢掉")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("content.total"))
+        }
+    }
+
+    @Test
+    fun `estimateItemBytes_对不带金额的行也算得准`() {
+        // 拆单的字节预算靠它装箱。A 类每行少约 30 字节，估算不跟着变的话
+        // 装箱会偏保守（能装的行没装满），而偏乐观就会撞 413。
+        val line = OrderLine("6901234567890", "可口可乐330ml", 14, amount = null, unitPrice = null)
+        val base = StableOrderJson.serialize(
+            purchaseDraft(items = listOf(line))
+        ).byteSize
+        val two = StableOrderJson.serialize(
+            purchaseDraft(items = listOf(line, line))
+        ).byteSize
+        assertEquals(two - base, StableOrderJson.estimateItemBytes(line))
     }
 
     // ==================== 确定性 ====================

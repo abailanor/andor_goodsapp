@@ -12,6 +12,7 @@ import com.example.myapplication.data.OrderStorage
 import com.example.myapplication.data.PendingOrderStorage
 import com.example.myapplication.data.Product
 import com.example.myapplication.data.ProductRepository
+import com.example.myapplication.data.PurchaseCart
 import com.example.myapplication.sync.OrderFileId
 import com.example.myapplication.sync.outbox.OutboxStore
 import com.example.myapplication.sync.outbox.OutboxUploader
@@ -19,9 +20,11 @@ import com.example.myapplication.ui.CurrentOrderMode
 import com.example.myapplication.ui.OrderMode
 import com.example.myapplication.util.AssetsSoundPlayer
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.util.Calendar
@@ -113,12 +116,25 @@ class OrderViewModel(
         _manualTotalText.value = null
     }
 
-    // 待开单相关状态
-    private val _sourcePendingFileName = MutableStateFlow<String?>(null)
-    val sourcePendingFileName: StateFlow<String?> = _sourcePendingFileName.asStateFlow()
+    // ==================== 待开单来源/目标（按模式分槽）====================
 
-    private val _targetPendingFileName = MutableStateFlow<String?>(null)
-    val targetPendingFileName: StateFlow<String?> = _targetPendingFileName.asStateFlow()
+    /** 一张待开单在开单页上的两个指针：从哪个文件读的、要存回哪个文件。 */
+    private data class PendingRef(val source: String? = null, val target: String? = null)
+
+    /**
+     * ⚠ 必须**按模式分槽**，切换模式时整对换进换出。
+     *
+     * 曾经是一对全局字段，后果是两张单互相吃：存了一张销售待开单（target=A.json），
+     * 切到进货再存一张 —— savePendingOrder 先删 `_targetPendingFileName` 指的 A.json，
+     * 于是销售那张在磁盘上没了，而销售车里的指针还写着 A.json。
+     * `OrderStorage` 本来就按模式分槽落盘，内存里不分槽等于白分。
+     */
+    private val _pendingRef = MutableStateFlow(PendingRef())
+
+    /** 当前不在编辑的那个模式的指针暂存在这里，切回去时换回来。 */
+    private val parkedRefs = mutableMapOf<OrderMode, PendingRef>()
+
+    val sourcePendingFileName: Flow<String?> = _pendingRef.map { it.source }
 
     var onSaveComplete: (() -> Unit)? = null
 
@@ -161,14 +177,19 @@ class OrderViewModel(
             val purchaseItems = hydrate(purchase.orderItems)
             _saleItems.value = saleItems
             _purchaseItems.value = purchaseItems
-            _sourcePendingFileName.value = sale.sourcePendingFileName
-            _targetPendingFileName.value = sale.targetPendingFileName
+            parkedRefs[OrderMode.SALE] = PendingRef(sale.sourcePendingFileName, sale.targetPendingFileName)
+            parkedRefs[OrderMode.PURCHASE] =
+                PendingRef(purchase.sourcePendingFileName, purchase.targetPendingFileName)
 
             val restored = when {
                 saleItems.isNotEmpty() -> OrderMode.SALE
                 purchaseItems.isNotEmpty() -> OrderMode.PURCHASE
                 else -> OrderMode.SALE
             }
+            // ⚠ 先把"当前模式"那槽的真实值放进 _pendingRef：下面 setMode 会把
+            // _pendingRef 泊回旧模式名下，如果这里还是空的初始值，就会把刚读回来的
+            // 指针盖掉（重启后"已加载待开单"的提示和覆盖目标全丢）。
+            _pendingRef.value = parkedRefs[_mode.value] ?: PendingRef()
             setMode(restored, persist = false)
         }
     }
@@ -225,6 +246,11 @@ class OrderViewModel(
      */
     fun setMode(mode: OrderMode, persist: Boolean = true) {
         if (_mode.value == mode && persist) return
+        if (_mode.value != mode) {
+            // 待开单指针跟购物车一样按模式分槽，切换时整对换进换出。
+            parkedRefs[_mode.value] = _pendingRef.value
+            _pendingRef.value = parkedRefs[mode] ?: PendingRef()
+        }
         _mode.value = mode
         CurrentOrderMode.set(mode)
         _orderItems.value = if (mode == OrderMode.SALE) _saleItems.value else _purchaseItems.value
@@ -254,8 +280,8 @@ class OrderViewModel(
             OrderStorage(ctx).saveOrderData(
                 mode = _mode.value.name,
                 orderItems = _orderItems.value,
-                sourcePendingFileName = _sourcePendingFileName.value,
-                targetPendingFileName = _targetPendingFileName.value,
+                sourcePendingFileName = _pendingRef.value.source,
+                targetPendingFileName = _pendingRef.value.target,
             )
         }
     }
@@ -269,11 +295,22 @@ class OrderViewModel(
     /**
      * 从待开单载入。待开单存的是 `product + quantity`（没有箱/个拆分），
      * 所以这里按箱规反推 —— 载入之后用户能在两个框里看见并改正。
+     *
+     * @param mode 这张待开单是销售还是进货。**必须先切模式再放购物车**：
+     *        `setCart` 写的是 `currentCart()`，也就是当前模式那辆车。
+     *        顺序反了的话进货单会被塞进销售车，用户看到的是一张带价格的进货单，
+     *        而结算时会走 B 类文件上传 —— 一笔进货被当成销售，计营收、扣库存。
+     *        null 表示旧文件（没存模式），按销售处理。
      */
-    fun loadPendingOrderItems(items: List<OrderItem>, sourceFileName: String, targetFileName: String? = null) {
+    fun loadPendingOrderItems(
+        items: List<OrderItem>,
+        sourceFileName: String,
+        targetFileName: String? = null,
+        mode: OrderMode? = null,
+    ) {
+        if (mode != null && mode != _mode.value) setMode(mode)
         setCart(CartPricing.fromCart(items.map { it.product to it.quantity }))
-        _sourcePendingFileName.value = sourceFileName
-        _targetPendingFileName.value = targetFileName
+        _pendingRef.value = PendingRef(source = sourceFileName, target = targetFileName)
         saveOrder()
     }
 
@@ -410,8 +447,7 @@ class OrderViewModel(
     fun clearOrder() {
         setCart(emptyList())
         _message.value = "订单已清空"
-        _sourcePendingFileName.value = null
-        _targetPendingFileName.value = null
+        _pendingRef.value = PendingRef()
         viewModelScope.launch {
             context?.let { OrderStorage(it).clearOrderItems(_mode.value.name) }
         }
@@ -533,20 +569,31 @@ class OrderViewModel(
         val lines = cartLines()
         val cal = Calendar.getInstance()
 
-        // ⚠ A 类**必须** month = null：服务端 validateTypeAndMonth 对 month<1||month>12 直接 400。
-        val req = CartPricing.toRequest(
-            lines = lines,
-            // 一律是当前登录用户名。离线且从没登录过时会是空串 —— 那时
-            // CheckoutDialog 的"确定"是禁用的，走不到这里。
-            writer = defaultWriter().ifBlank { owner },
-            ts = System.currentTimeMillis(),
-            fileType = if (purchase) OrderFileId.TYPE_A else OrderFileId.TYPE_B,
-            year = cal.get(Calendar.YEAR),
-            month = if (purchase) null else cal.get(Calendar.MONTH) + 1,
-            // 进货单不算钱：手工总额只对销售单有意义
-            manualTotalCents = if (purchase) null else manualTotalCents,
-            remarkText = if (purchase) remarkText else null,
-        )
+        // ⚠ 两条路**完全分开**，不是一个函数的两个分支。
+        // 进货走 PurchaseCart：它的行类型里没有价格字段，所以"进货不算钱"是类型保证的，
+        // 不是靠这里记得传 `manualTotalCents = null`。理由见 PurchaseCart 的类注释。
+        val writer = defaultWriter().ifBlank { owner }
+        val now = System.currentTimeMillis()
+        val req = if (purchase) {
+            PurchaseCart.toRequest(
+                cart = lines,
+                writer = writer,
+                ts = now,
+                year = cal.get(Calendar.YEAR),
+                remarkText = remarkText,
+            )
+        } else {
+            CartPricing.toRequest(
+                lines = lines,
+                // 一律是当前登录用户名。离线且从没登录过时会是空串 —— 那时
+                // CheckoutDialog 的"确定"是禁用的，走不到这里。
+                writer = writer,
+                ts = now,
+                year = cal.get(Calendar.YEAR),
+                month = cal.get(Calendar.MONTH) + 1,
+                manualTotalCents = manualTotalCents,
+            )
+        }
         if (req == null) {
             _message.value = "有商品缺箱规，算不出个数，请先补齐"
             return
@@ -610,15 +657,20 @@ class OrderViewModel(
             try {
                 val ctx = context ?: return@launch
                 val storage = PendingOrderStorage(ctx)
-                val total = totalPrice.toPlainString()
-                _targetPendingFileName.value?.let { name ->
+                val purchase = _mode.value == OrderMode.PURCHASE
+                // ⚠ 进货单存空串，**不存金额**：`totalPrice` 走的是 CartPricing，
+                // 拿的是本地目录里的**卖出价**。进货价服务端根本不存，
+                // 把它写进待开单等于编一个数字出来，之后还会被当成应收显示给用户。
+                val total = if (purchase) "" else totalPrice.toPlainString()
+                _pendingRef.value.target?.let { name ->
                     val f = java.io.File(ctx.filesDir, "PendingOrders/$name")
                     if (f.exists()) f.delete()
                 }
-                val savedFile = storage.savePendingOrder(toOrderItems(), total)
+                // ⚠ 必须把当前模式一起存下去：待开单页要按模式分开列，
+                // 而加载回来时要先切到对应模式再放购物车。
+                val savedFile = storage.savePendingOrder(toOrderItems(), total, mode = _mode.value.name)
                 savedFileName = savedFile.record.fileName
-                _targetPendingFileName.value = savedFile.record.fileName
-                _sourcePendingFileName.value = _targetPendingFileName.value
+                _pendingRef.value = PendingRef(source = savedFileName, target = savedFileName)
                 _message.value = "已保存到待开单"
                 saveOrder()
                 onSaveComplete?.invoke()
@@ -632,7 +684,7 @@ class OrderViewModel(
     /** 有效行数（两个框都空的中间态不算）。 */
     fun getOrderItemCount(): Int = validLines().size
 
-    fun getTargetPendingFileName(): String? = _targetPendingFileName.value
+    fun getTargetPendingFileName(): String? = _pendingRef.value.target
 }
 
 /**

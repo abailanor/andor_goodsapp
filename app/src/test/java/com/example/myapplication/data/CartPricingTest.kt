@@ -399,7 +399,6 @@ class CartPricingTest {
             lines = listOf(CartLine(product(), boxes = 1, singles = 6)),
             writer = "clerk1",
             ts = 1_758_000_000_000L,
-            fileType = OrderFileId.TYPE_B,
             year = 2026,
             month = 9,
             manualTotalCents = 10_000L,
@@ -417,26 +416,11 @@ class CartPricingTest {
     }
 
     @Test
-    fun `toRequest_A_类的_month_必须是_null`() {
-        // 传 0 会撞服务端 validateTypeAndMonth 的 month<1||month>12 → 400
-        val req = CartPricing.toRequest(
-            lines = listOf(CartLine(product(), singles = 1)),
-            writer = "alice", ts = 0L,
-            fileType = OrderFileId.TYPE_A, year = 2026, month = null,
-            remarkText = "进货一批",
-        )!!
-
-        assertEquals(OrderFileId.TYPE_A, req.fileType)
-        assertNull(req.month)
-        assertEquals("进货一批", req.remarkText)
-    }
-
-    @Test
     fun `toRequest_有行算不出个数时返回_null`() {
         val req = CartPricing.toRequest(
             lines = listOf(CartLine(product(boxSize = 0), boxes = 1)),
             writer = "alice", ts = 0L,
-            fileType = OrderFileId.TYPE_B, year = 2026, month = 9,
+            year = 2026, month = 9,
         )
 
         assertNull(req)

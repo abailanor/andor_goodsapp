@@ -50,6 +50,21 @@ class OrderGroupAssemblerTest {
         unitPrice = "8.57",
     )
 
+    /**
+     * 进货行：**不带任何金额**（`amount` / `unitPrice` 都是 null）。
+     *
+     * ⚠ A 类用例必须用它，不能拿 [line] 去掉金额：`StableOrderJson` 会拦"半张单带价"，
+     * 而 `OrderGroupAssembler` 也要求 A 类的行一律无金额。用带价的行去测 A 类，
+     * 测的是"拆单器能不能容忍一个它本该拒绝的输入"，而不是拆单本身。
+     */
+    private fun purchaseLine(i: Int) = OrderLine(
+        "69012345678901234567",
+        "可口可乐330ml*24瓶整箱装促销特价",
+        1440,
+        amount = null,
+        unitPrice = null,
+    )
+
     private fun bReq(
         lines: List<OrderLine>,
         totalOverrideCents: Long? = null,
@@ -79,10 +94,29 @@ class OrderGroupAssemblerTest {
     )
 
     private fun assembleB(lines: List<OrderLine>, totalOverrideCents: Long? = null) =
-        OrderGroupAssembler.assemble(bReq(lines, totalOverrideCents), uuidFactory) { "a3f9c21b" }
+        OrderGroupAssembler.assemble(bReq(priced(lines), totalOverrideCents), uuidFactory) { "a3f9c21b" }
 
-    private fun assembleA(lines: List<OrderLine>, remarkText: String? = null, totalOverrideCents: Long? = null) =
-        OrderGroupAssembler.assemble(aReq(lines, remarkText, totalOverrideCents), uuidFactory) { "a3f9c21b" }
+    /**
+     * B 类行**必须**带金额（`assemble` 会 require），所以整批转换统一走这里。
+     *
+     * 这些用例的主题是拆单与总额分配，不是"哪些行带价"—— 后者由
+     * `StableOrderJsonTest` 与 A 类那几个用例覆盖。
+     */
+    private fun priced(lines: List<OrderLine>): List<OrderLine> =
+        lines.map {
+            // 已经带价的行**原样返回**（不 copy）：这让 priced() 幂等到"同一引用"，
+            // 于是"行数守恒"那条用例可以按引用比对，顺带证明没有哪一行被复制成两份。
+            if (it.amount != null && it.unitPrice != null) it
+            else it.copy(amount = it.amount ?: "1.00", unitPrice = it.unitPrice ?: "1.00")
+        }
+
+    /**
+     * A 类**不接受** `totalOverrideCents`：进货单没有金额，也就没有"手工覆盖总额"这回事，
+     * 传进去的数无处可写（`OrderGroupAssembler` 会 require 失败）。
+     */
+    private fun assembleA(lines: List<OrderLine>, remarkText: String? = null) =
+        OrderGroupAssembler.assemble(aReq(lines, remarkText), uuidFactory) { "a3f9c21b" }
+
 
     private fun json(c: OrderGroupAssembler.Chunk) = String(c.serialized.payload, Charsets.UTF_8)
 
@@ -131,12 +165,17 @@ class OrderGroupAssemblerTest {
 
     @Test
     fun 行数守恒_且顺序不变() {
-        val lines = (0 until 200).map { longLine(it) }
+        // ⚠ 传 `priced(longLine)`：`assembleB` 内部会再 `priced()` 一次，而它是幂等的
+        // （`amount ?: "1.00"`，已经有值就原样返回）—— 于是 `copy()` 产出**相等**的对象，
+        // 但**不是同一个引用**。要比引用就必须拿 assembleB 真正收到的那份列表来比。
+        val lines = priced((0 until 200).map { longLine(it) })
         val r = assembleB(lines)
 
         val flat = r.chunks.flatMap { it.draft.items }
         assertEquals("拆单丢行或多行", lines.size, flat.size)
-        // 行是不可变的，所以能直接按引用比 —— 这同时证明了"没有哪一行被复制成两份"
+        // ⚠ 要比 `assembleB` **收到**的那份列表（已经过 priced()），不是原始那份：
+        // assembleB 内部会再 copy 一次补金额，跟原始对象比引用必然全错。
+        // 按引用比仍然有意义 —— 它同时证明了"没有哪一行被复制成两份"。
         lines.forEachIndexed { i, l -> assertTrue("第 $i 行顺序变了", flat[i] === l) }
     }
 
@@ -169,8 +208,8 @@ class OrderGroupAssemblerTest {
         // ⚠ 必须写参数名：`assemble` 有**两个**尾随 lambda 参数，
         // 只给一个的话它会绑到 `groupIdFactory` 上（Kotlin 的尾随 lambda 绑最后一个参数），
         // 于是 uuidFactory 悄悄退回默认的随机 uuid，这条用例就什么也没证明。
-        val a = OrderGroupAssembler.assemble(bReq(lines), uuidFactory = { uuid(0) })
-        val b = OrderGroupAssembler.assemble(bReq(lines), uuidFactory = { uuid(999) })
+        val a = OrderGroupAssembler.assemble(bReq(priced(lines)), uuidFactory = { uuid(0) })
+        val b = OrderGroupAssembler.assemble(bReq(priced(lines)), uuidFactory = { uuid(999) })
 
         assertEquals(a.chunks.map { it.draft.items.size }, b.chunks.map { it.draft.items.size })
         assertEquals(a.chunks.map { it.serialized.byteSize }, b.chunks.map { it.serialized.byteSize })
@@ -181,7 +220,7 @@ class OrderGroupAssemblerTest {
     @Test
     fun 手工差额整笔落在最后一块_且各块之和恒等于覆盖值() {
         val lines = (0 until 200).map { longLine(it) }
-        val sumAll = lines.sumOf { Money.toCents(it.amount) }
+        val sumAll = lines.sumOf { Money.toCents(it.amount!!) }
         val override = sumAll + 5_00          // 用户抹零/加价 5 元
         val r = assembleB(lines, override)
         assertTrue("这个用例需要真的拆开才有意义", r.chunkCount >= 2)
@@ -200,7 +239,7 @@ class OrderGroupAssemblerTest {
     @Test
     fun 差额为负也一样成立() {
         val lines = (0 until 200).map { longLine(it) }
-        val sumAll = lines.sumOf { Money.toCents(it.amount) }
+        val sumAll = lines.sumOf { Money.toCents(it.amount!!) }
         val r = assembleB(lines, sumAll - 12_34)
 
         assertEquals(sumAll - 12_34, r.chunks.sumOf { parsed(it).totalCents })
@@ -220,7 +259,7 @@ class OrderGroupAssemblerTest {
         val lines = (0 until 200).map { longLine(it) }
         val r = assembleB(lines)
 
-        assertEquals(lines.sumOf { Money.toCents(it.amount) }, r.chunks.sumOf { parsed(it).totalCents })
+        assertEquals(lines.sumOf { Money.toCents(it.amount!!) }, r.chunks.sumOf { parsed(it).totalCents })
         r.chunks.forEach { assertFalse("没手工改过就不该有含手工调整标记", parsed(it).manualTotal) }
     }
 
@@ -228,7 +267,7 @@ class OrderGroupAssemblerTest {
 
     @Test
     fun A_类每一块都出生即_150_字节_remark() {
-        val r = assembleA((0 until 200).map { longLine(it) }, remarkText = "向丽华金龙进货")
+        val r = assembleA((0 until 200).map { purchaseLine(it) }, remarkText = "向丽华金龙进货")
         assertTrue("这个用例需要真的拆开才有意义", r.chunkCount >= 2)
 
         r.chunks.forEachIndexed { i, c ->
@@ -250,7 +289,7 @@ class OrderGroupAssemblerTest {
 
     @Test
     fun A_类只有第一块带用户文本_其余是空白() {
-        val r = assembleA((0 until 200).map { longLine(it) }, remarkText = "向丽华金龙进货")
+        val r = assembleA((0 until 200).map { purchaseLine(it) }, remarkText = "向丽华金龙进货")
 
         assertEquals("向丽华金龙进货", parsed(r.chunks[0]).remark)
         r.chunks.drop(1).forEachIndexed { i, c ->
@@ -261,7 +300,7 @@ class OrderGroupAssemblerTest {
 
     @Test
     fun A_类没填备注也强制生成_150_字节空位() {
-        val r = assembleA(listOf(line(0)))
+        val r = assembleA(listOf(purchaseLine(0)))
 
         val c = r.chunks[0]
         assertNotNull("A 类必须出生即带 remark，否则这一行以后永远插不进去", parsed(c).offsets.remarkValueIndex)
@@ -274,7 +313,7 @@ class OrderGroupAssemblerTest {
         // `padRemark` 会拒绝 `"` `\` 与控制字符（JSON 转义后字节数会变，等长覆写就算错了）。
         // 备注是**用户输入**，所以整理必须发生在这一层，不能把异常抛到用户脸上。
         val nasty = "第一行\n第二行\t带制表符 \"引号\" 与 \\反斜杠\\ " + "很长很长的中文备注".repeat(20)
-        val r = assembleA(listOf(line(0)), remarkText = nasty)
+        val r = assembleA(listOf(purchaseLine(0)), remarkText = nasty)
 
         val c = r.chunks[0]
         val p = parsed(c)

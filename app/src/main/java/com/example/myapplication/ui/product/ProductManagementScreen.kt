@@ -34,7 +34,14 @@ enum class ProductManagementTab {
 @Composable
 fun ProductManagementScreen(
     viewModel: ProductViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * 本店用不用整箱（`AppSettings.enableBoxSelling`）。
+     *
+     * ⚠ 必须是**每次重组都重新读**的值，不能 remember 住：用户在设置里改完切回来，
+     * 这一页要立刻按新设置显示或隐藏整箱价/箱规两个框。
+     */
+    enableBoxSelling: Boolean = true,
 ) {
     val products by viewModel.products.collectAsState()
     val message by viewModel.message.collectAsState()
@@ -90,10 +97,14 @@ fun ProductManagementScreen(
         // 根据选中的Tab显示对应界面
         when (selectedTab) {
             ProductManagementTab.ADD_PRODUCT -> {
-                AddProductScreen(viewModel = viewModel)
+                AddProductScreen(viewModel = viewModel, enableBoxSelling = enableBoxSelling)
             }
             ProductManagementTab.MODIFY_PRODUCT -> {
-                ModifyProductScreen(viewModel = viewModel, products = products)
+                ModifyProductScreen(
+                    viewModel = viewModel,
+                    products = products,
+                    enableBoxSelling = enableBoxSelling,
+                )
             }
 //            ProductManagementTab.PRODUCT_LIST -> {
 //                ProductListScreen(products = products)
@@ -109,20 +120,23 @@ fun ProductManagementScreen(
 @Composable
 fun AddProductScreen(
     viewModel: ProductViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * 本店用不用整箱（`AppSettings.enableBoxSelling`）。
+     *
+     * 关着就**不显示**整箱价与箱规两个框，存进去的是 `boxPrice = null` / `boxSize = 0`。
+     * ⚠ 不是存 `boxPrice = 0`：0 的语义是"整箱免费"，null 才是"不按整箱卖"
+     * （见 docs/INTERCHANGE_FORMAT.md §2.2）。混用的话整箱优惠会算出负数。
+     *
+     * 做成**全局**设置而不是每商品一个开关：大多数店根本不按整箱卖，
+     * 每商品一个开关会让它们录入每个商品时都多看一行没用的选项。
+     */
+    enableBoxSelling: Boolean = true,
 ) {
     var barcode by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var price by remember { mutableStateOf("") }
 
-    /**
-     * 这个商品按整箱卖吗。
-     *
-     * 关着的时候下面两个框**不显示**，存进去的是 `boxPrice = null` / `boxSize = 0`。
-     * ⚠ 不是存 `boxPrice = 0`：0 的语义是"整箱免费"，null 才是"不按整箱卖"
-     * （见 docs/INTERCHANGE_FORMAT.md §2.2）。混用的话整箱优惠会算出负数。
-     */
-    var sellsByBox by remember { mutableStateOf(false) }
     var boxPrice by remember { mutableStateOf("") }
     var boxSize by remember { mutableStateOf("") }
 
@@ -132,6 +146,10 @@ fun AddProductScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            // ⚠ 必须可滚动。这个 Column 不滚的话，字段一多（整箱价、箱规、
+            // 再加上键盘弹起来占掉半屏）下面的框就被**挤出屏幕且无法到达** ——
+            // 用户看到的是"框不见了"，而不是"往下滑还有"。
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -196,25 +214,19 @@ fun AddProductScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // 整箱规格与整箱价：**只在需要时才显示**。
-                // 一直摆着的话，用户会给每个商品都随手填个 0，而 0 是"整箱免费"、
-                // 空箱规又是"算不出个数"的坏状态 —— 两种都会在开单时静默算错钱。
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("这个商品按整箱卖", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "关掉就只存单价；打开则必须填整箱价和一箱几个",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(checked = sellsByBox, onCheckedChange = { sellsByBox = it })
-                }
-
-                if (sellsByBox) {
+                // 整箱规格与整箱价：由**全局设置**决定是否显示（设置 → 开单 → 本店按整箱卖）。
+                //
+                // 这里原来是一个"这个商品按整箱卖"的每商品开关，拿掉了：
+                // 大多数店根本不按整箱卖，每商品一个开关会让它们录入每个商品时
+                // 都多看一行没用的选项。整箱是**店铺级**的经营方式，不是商品级的属性。
+                //
+                // ⚠ 关掉设置不删数据：已填的 boxPrice / boxSize 还在库里，重开就还在。
+                if (enableBoxSelling) {
+                    Text(
+                        "整箱（本店已启用整箱，可在 设置 → 开单 里关掉）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     OutlinedTextField(
                         value = boxPrice,
                         onValueChange = { boxPrice = it },
@@ -250,14 +262,16 @@ fun AddProductScreen(
                                 barcode = barcode,
                                 name = name,
                                 price = price,
-                                sellsByBox = sellsByBox,
+                                sellsByBox = enableBoxSelling,
                                 boxPrice = boxPrice,
                                 boxSize = boxSize,
+                                // 全局关掉整箱时**不要**把已填的整箱价清掉：
+                                // 用户只是想暂时不看那两个框，不是想丢数据。
+                                preserveExistingBox = !enableBoxSelling,
                                 onSuccess = {
                                     barcode = ""
                                     name = ""
                                     price = ""
-                                    sellsByBox = false
                                     boxPrice = ""
                                     boxSize = ""
                                 },
@@ -273,7 +287,6 @@ fun AddProductScreen(
                             barcode = ""
                             name = ""
                             price = ""
-                            sellsByBox = false
                             boxPrice = ""
                             boxSize = ""
                         },
@@ -293,18 +306,20 @@ fun AddProductScreen(
 fun ModifyProductScreen(
     viewModel: ProductViewModel,
     products: List<Product>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 见 [AddProductScreen] 的同名参数：整箱是**店铺级**设置，不是每商品一个开关。 */
+    enableBoxSelling: Boolean = true,
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedProduct by remember { mutableStateOf<Product?>(null) }
-    
+
     var editBarcode by remember { mutableStateOf("") }
     var editName by remember { mutableStateOf("") }
     var editPrice by remember { mutableStateOf("") }
-    var editSellsByBox by remember { mutableStateOf(false) }
     var editBoxPrice by remember { mutableStateOf("") }
     var editBoxSize by remember { mutableStateOf("") }
     var refreshTrigger by remember { mutableStateOf(0) }
+    // 搜索同时支持商品名与**条形码**（searchProductsByName 内部按"全是数字"分流）。
     val filteredProducts = remember(searchQuery,refreshTrigger) {
         viewModel.searchProductsByName(searchQuery)
     }
@@ -314,18 +329,17 @@ fun ModifyProductScreen(
             editBarcode = product.barcode
             editName = product.name
             editPrice = product.price.toString()
-            // ⚠ 判据用 `boxPrice != null`，不是 `boxSize > 0`：
-            // boxPrice 为 null 才是"不按整箱卖"，而 boxSize == 0 只表示"箱规没填"。
-            // 用后者判断会把"整箱免费"（boxPrice = 0）误显示成不按整箱卖。
-            editSellsByBox = product.boxPrice != null
             editBoxPrice = product.boxPrice?.toPlainString() ?: ""
             editBoxSize = if (product.boxSize > 0) product.boxSize.toString() else ""
         }
     }
-    
+
     Column(
         modifier = modifier
             .fillMaxSize()
+            // ⚠ 必须可滚动，理由同 AddProductScreen：不滚的话字段一多
+            // （或键盘弹起来）下面的框就被挤出屏幕且无法到达。
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -456,24 +470,17 @@ fun ModifyProductScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // 与新增表单同一套：不按整箱卖就**不显示**这两个框，
-                    // 存进去的是 boxPrice = null / boxSize = 0（不是 0 / 0）。
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("这个商品按整箱卖", style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "关掉会把已填的整箱价清成 null（= 不按整箱卖，不是免费）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(checked = editSellsByBox, onCheckedChange = { editSellsByBox = it })
-                    }
-
-                    if (editSellsByBox) {
+                    // 与新增表单同一套：由**全局设置**决定是否显示（设置 → 开单 → 本店按整箱卖）。
+                    // 这里原来也有一个每商品的开关，一并拿掉了 —— 整箱是店铺级的经营方式。
+                    //
+                    // 某个具体商品不按整箱卖，靠"整箱价留空"表达：
+                    // 留空 → boxPrice = null（不按整箱卖）；填 0 → "整箱免费"。两者不同。
+                    if (enableBoxSelling) {
+                        Text(
+                            "整箱（留空即表示这个商品不按整箱卖）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         OutlinedTextField(
                             value = editBoxPrice,
                             onValueChange = { editBoxPrice = it },
@@ -507,9 +514,13 @@ fun ModifyProductScreen(
                                         barcode = editBarcode,
                                         name = editName,
                                         price = editPrice,
-                                        sellsByBox = editSellsByBox,
+                                        // 整箱价填了才算按整箱卖；留空 = 不按整箱卖（null，不是 0）
+                                        sellsByBox = enableBoxSelling &&
+                                            (editBoxPrice.isNotBlank() || editBoxSize.isNotBlank()),
                                         boxPrice = editBoxPrice,
                                         boxSize = editBoxSize,
+                                        // 全局关掉整箱时不要清掉已填的数据
+                                        preserveExistingBox = !enableBoxSelling,
                                     )
 
                                     refreshTrigger++
@@ -518,7 +529,6 @@ fun ModifyProductScreen(
                                     editBarcode = ""
                                     editName = ""
                                     editPrice = ""
-                                    editSellsByBox = false
                                     editBoxPrice = ""
                                     editBoxSize = ""
                                 }
@@ -534,7 +544,6 @@ fun ModifyProductScreen(
                                 editBarcode = ""
                                 editName = ""
                                 editPrice = ""
-                                editSellsByBox = false
                                 editBoxPrice = ""
                                 editBoxSize = ""
                             },

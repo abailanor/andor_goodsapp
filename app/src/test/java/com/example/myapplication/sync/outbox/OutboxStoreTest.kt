@@ -81,6 +81,18 @@ class OutboxStoreTest {
         amount: String = "52.00",
     ) = OrderLine(barcode, name, qty, amount, "1.00")
 
+    /**
+     * 进货行：**不带金额**（A 类的 amount/unitPrice 都是 null）。
+     *
+     * ⚠ A 类用例必须用它：`StableOrderJson` 与 `OrderGroupAssembler` 都要求
+     * "A 类整单无金额"，拿带价的行去测 A 类只会撞 require。
+     */
+    private fun purchaseLine(
+        barcode: String = "6901234567890",
+        name: String = "可口可乐330ml",
+        qty: Int = 14,
+    ) = OrderLine(barcode, name, qty, amount = null, unitPrice = null)
+
     /** n 条互不相同的行，用来把订单顶过拆单的字节预算。 */
     private fun manyLines(n: Int, amountEach: String = "1.00"): List<OrderLine> =
         (1..n).map { line(barcode = "69012345${it.toString().padStart(6, '0')}", qty = 1, amount = amountEach) }
@@ -145,7 +157,8 @@ class OutboxStoreTest {
 
     @Test
     fun `A_类订单不产出任何_OUTBOX_贡献行`() {
-        enqueue(req(fileType = OrderFileId.TYPE_A, month = null, remarkText = "进货一批"))
+        enqueue(req(fileType = OrderFileId.TYPE_A, month = null, remarkText = "进货一批",
+            lines = listOf(purchaseLine())))
 
         // 不是"贡献为 0"，而是**根本没有行** —— 见 OutboxContribution.of 的注释：
         // 值为 0 的行会把自检查询淹掉。A 类是向总部进货，不是本店收入。

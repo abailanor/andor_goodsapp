@@ -238,7 +238,13 @@ object CartPricing {
         lines.filter { it.needsBoxSize }.map { it.product.barcode }.distinct()
 
     /**
-     * 转成上传用的 [OrderLine]。
+     * 转成上传用的 [OrderLine]（每行都带 amount/unitPrice）。
+     *
+     * ## ⚠ 进货不走这里
+     *
+     * 进货行的转换在 [PurchaseCart.linesOf]，那边的 `Line` 类型**根本没有价格字段**。
+     * 曾经这里是 `toOrderLines(lines, priced: Boolean = true)`，一个默认参数就足以让
+     * "忘了传 false" 变成"进货单带上了卖出价" —— 编译过、测试绿、账上是编的数字。
      *
      * @return null 表示**有行算不出 quantity**（缺箱规）。调用方必须先处理
      *         [missingBoxSize]，不能拿一个不完整的列表去上传。
@@ -266,36 +272,42 @@ object CartPricing {
     }
 
     /**
-     * 拼出交给 [com.example.myapplication.sync.outbox.OutboxStore.enqueue] 的请求。
+     * 拼出交给 [com.example.myapplication.sync.outbox.OutboxStore.enqueue] 的**销售**（B 类）请求。
+     *
+     * ## ⚠ 这里没有 `fileType` 参数：进货走 [PurchaseCart.toRequest]
+     *
+     * 曾经它接受 `fileType`，A/B 两条路共用一个函数。代价是"进货不算钱"退化成
+     * 函数体里的一个分支 —— 调用点传错 `fileType`，编译照过、测试照绿，
+     * 而镜像里就多了一笔用卖出价编出来的进货金额。
+     *
+     * 现在类型系统替你记着：**要算钱就只能开 B 类单**。
      *
      * @param writer 订单的**归属人**。默认是当前登录用户名，但可以是别的店员 ——
      *        现实中存在"某店员的账号永远不再登录，但他开的单仍需上传"的情况，
      *        而服务端**不校验** `writer` 与登录身份是否一致（只验非空白），所以代传是合法的。
      *        ⚠ 归属人只能在下单这一刻定对：服务端没有任何接口能改已上传订单的 `writer`。
-     * @param fileType [OrderFileId.TYPE_B] 销售 / [OrderFileId.TYPE_A] 进货。
-     * @param month B 类必须 1..12；**A 类必须传 null**（传 0 会撞服务端月份校验拿 400）。
+     * @param month 必须 1..12。
      * @return null 表示有行算不出 quantity。
      */
     fun toRequest(
         lines: List<CartLine>,
         writer: String,
         ts: Long,
-        fileType: String,
         year: Int,
-        month: Int?,
+        month: Int,
         manualTotalCents: Long? = null,
-        remarkText: String? = null,
     ): OrderGroupAssembler.Request? {
         val orderLines = toOrderLines(lines) ?: return null
         return OrderGroupAssembler.Request(
-            fileType = fileType,
+            fileType = OrderFileId.TYPE_B,
             year = year,
             month = month,
             writer = writer,
             lines = orderLines,
             ts = ts,
             totalOverrideCents = manualTotalCents,
-            remarkText = remarkText,
+            // B 类不许带备注：订单模型里没有这个字段，150 字节空位会白白吃掉请求体预算
+            remarkText = null,
         )
     }
 }

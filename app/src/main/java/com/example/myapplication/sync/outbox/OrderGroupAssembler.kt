@@ -169,7 +169,27 @@ object OrderGroupAssembler {
             }
         }
 
-        val budget = BYTE_BUDGET - TOTAL_SLACK
+        // 金额字段的形状必须与文件类型对齐。**A 类一行都不许带金额**：
+        // 服务端根本不存买入价（README §6.2），本地目录里的 `price` 是**卖出价**，
+        // 拿它给进货行标金额就是把编出来的数字永久写进镜像 ——
+        // 而 `content` 是变长字段，上传后**再也改不了**（补丁只能等长覆写 status 那一个字节）。
+        //
+        // B 类反过来：每行都必须带，缺了小票的折扣行与价格漂移检测都做不了。
+        // ⚠ 判据是 `== isA`，不是 `== !isA`：A 类要求 amount **为 null**。
+        // 取反写的话条件恒成立（B 类带价、A 类不带价都被放行），
+        // 而 A 类带价的那一路会把卖出价永久写进镜像 —— 见上面那段说明。
+        req.lines.forEach {
+            require((it.amount == null) == isA) {
+                "${if (isA) "A 类进货" else "B 类销售"}单的 amount 必须" +
+                    "${if (isA) "为 null" else "非 null"}，barcode=${it.barcode} amount=${it.amount}"
+            }
+            require((it.unitPrice == null) == isA) {
+                "${if (isA) "A 类进货" else "B 类销售"}单的 unitPrice 必须" +
+                    "${if (isA) "为 null" else "非 null"}，barcode=${it.barcode}"
+            }
+        }
+
+        val budget = if (isA) BYTE_BUDGET else BYTE_BUDGET - TOTAL_SLACK
 
         // ---- 第一遍：只决定"每块装哪些行"。序列化用 PROBE_UUID/PROBE_GROUP，尺寸恒定。 ----
         //
@@ -204,7 +224,11 @@ object OrderGroupAssembler {
 
         // ---- 第二遍：真 uuid、真 grp、真 total。 ----
         val groupId = if (ranges.size > 1) groupIdFactory() else null
-        val sumAll = req.lines.sumOf { Money.toCents(it.amount) }
+        // A 类的行没有 amount（见 OrderLine.amount 的注释），求和恒为 0、total 写 null。
+        val sumAll = req.lines.sumOf { it.amount?.let(Money::toCents) ?: 0L }
+        require(!isA || req.totalOverrideCents == null) {
+            "A 类进货单没有金额，也就不存在\"手工覆盖总额\"。传进来的 ${req.totalOverrideCents} 无处可写"
+        }
         val delta = (req.totalOverrideCents ?: sumAll) - sumAll
 
         val chunks = ArrayList<Chunk>(ranges.size)
@@ -213,13 +237,13 @@ object OrderGroupAssembler {
             // （它会被序列化进 outbox 行、被上传、被 UI 读取）。留着视图的话，
             // 调用方哪天复用同一个 MutableList 装下一单，这一单的 items 就跟着变了。
             val lines = req.lines.subList(r.first, r.last + 1).toList()
-            val sum = lines.sumOf { Money.toCents(it.amount) }
+            val sum = lines.sumOf { it.amount?.let(Money::toCents) ?: 0L }
             val totalCents = if (i == ranges.lastIndex) sum + delta else sum
             val draft = OrderDraft(
                 orderUuid = uuidFactory(),
                 writer = req.writer,
                 items = lines,
-                total = Money.fromCents(totalCents),
+                total = if (isA) null else Money.fromCents(totalCents),
                 ts = req.ts,
                 groupId = groupId,
                 remark = remarkFor(req, isA, i),
@@ -258,7 +282,8 @@ object OrderGroupAssembler {
             orderUuid = PROBE_UUID,
             writer = req.writer,
             items = lines,
-            total = Money.fromCents(lines.sumOf { Money.toCents(it.amount) }),
+            total = if (isA) null
+            else Money.fromCents(lines.sumOf { it.amount?.let(Money::toCents) ?: 0L }),
             ts = req.ts,
             groupId = PROBE_GROUP,
             // `remarkFor` 只区分"第一块 / 其余块"，而第一块的判据就是 from==0。
