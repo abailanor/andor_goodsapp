@@ -732,7 +732,9 @@ interface OrderFileDao {
     @Query(
         """
         SELECT IFNULL((SELECT SUM(value) FROM stats_contrib
-                       WHERE storeKey = :storeKey AND scope = 'OUTBOX' AND metric = 'amountCents'), 0)
+                       WHERE storeKey = :storeKey
+                             AND scope IN ('OUTBOX', 'OUTBOX_FAILED')
+                             AND metric = 'amountCents'), 0)
              - IFNULL((SELECT SUM(totalCents) FROM order_outbox
                        WHERE storeKey = :storeKey AND fileType = 'B'
                              AND state <> 'PROMOTED' AND state <> 'DRAFT'), 0)
@@ -866,6 +868,15 @@ interface OrderFileDao {
      *
      * ⚠ 这与 FULL 重投影路径的 `WHERE frozen = 0` 不矛盾：
      * 那边是"不要覆盖已冻结的行"，这边是"冻结的钱仍然是钱"。
+     *
+     * ## [includeFailed] 是唯一的 scope 过滤
+     *
+     * `OUTBOX_FAILED`（重推到顶 / 413 / 400 的单）算不算营业额由用户决定：
+     * 货确实给客人了、钱真收了，所以**默认算**；但有的店主只想看"成功进了系统的钱"。
+     *
+     * ⚠ 这个开关必须是**读取侧**的事，不能靠切换时改库：
+     * 改库就要把贡献在两个桶之间搬来搬去，来回切几次之后任何一次算错都会永久留在账上，
+     * 而且看不出来。放在查询里，切多少次都不会漂移。
      */
     @Query(
         """
@@ -873,10 +884,16 @@ interface OrderFileDao {
         FROM stats_contrib
         WHERE storeKey = :storeKey
           AND substr(dimKey, 1, 10) BETWEEN :fromDate AND :toDate
+          AND (:includeFailed = 1 OR scope <> 'OUTBOX_FAILED')
         GROUP BY dimKey, metric
         """
     )
-    fun observeContribInRange(storeKey: String, fromDate: String, toDate: String): Flow<List<ContribAggregate>>
+    fun observeContribInRange(
+        storeKey: String,
+        fromDate: String,
+        toDate: String,
+        includeFailed: Boolean,
+    ): Flow<List<ContribAggregate>>
 }
 
 /** [OrderFileDao.observeContribInRange] 的一行。`SUM()` 分组后每组至少有一行，不可能为 NULL。 */

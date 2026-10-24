@@ -380,7 +380,7 @@ class OutboxUploader(
                 // 而本地再也不会同步它 → 只有这台设备知道那份数据。所以直接交人工。
                 is OrderFileSyncEngine.Outcome.Archived -> group.forEach {
                     val msg = "该月已归档（fileId=$fileId），不能再上传"
-                    store.failPermanently(storeKey, it.orderUuid, msg)
+                    store.failPermanently(storeKey, ownerName, it.orderUuid, msg)
                     audit("IN_FLIGHT 恢复：$msg uuid=${it.orderUuid}")
                     out += Recovery.GaveUp(it.orderUuid, msg)
                 }
@@ -419,7 +419,7 @@ class OutboxUploader(
         val row = dao.outboxRow(storeKey, orderUuid) ?: return Recovery.StillUnknown(orderUuid, "行已不存在")
         if (row.attemptCount >= OrderOutboxEntity.MAX_ATTEMPTS) {
             val msg = "结果未知的尝试已达 ${row.attemptCount} 次，且同步后服务端仍无此单"
-            store.failPermanently(storeKey, orderUuid, msg)
+            store.failPermanently(storeKey, ownerName, orderUuid, msg)
             audit("IN_FLIGHT 放弃 uuid=$orderUuid：$msg")
             return Recovery.GaveUp(orderUuid, msg)
         }
@@ -456,14 +456,14 @@ class OutboxUploader(
             // indexOf 兜底算偏移，两边不一致就是静默错位。
             val msg = "本地 payload 扫不出偏移，拒绝上传（BLOB 可能已损坏）"
             audit("⚠ $msg uuid=$uuid fileId=$fileId")
-            store.failPermanently(storeKey, uuid, msg)
+            store.failPermanently(storeKey, ownerName, uuid, msg)
             return UploadResult.FailedPermanent(uuid, msg)
         }
 
         val res = try {
             api.addOrder(row.fileType, row.year, parts.monthOrNull, String(payload, Charsets.UTF_8))
         } catch (e: ApiError) {
-            return onFailure(storeKey, uuid, e)
+            return onFailure(storeKey, ownerName, uuid, e)
         }
 
         // ---- 响应校验：任何一处对不上都不落地 ----
@@ -501,7 +501,7 @@ class OutboxUploader(
             val msg = "服务端把订单写进了 $serverFileId，而本地按 ownerName 算出的是 $fileId"
             audit("⚠⚠ $msg uuid=$uuid —— 极可能 ownerName 存成了登录名。" +
                 "不再重推（会不断追加到一个本地永不同步的文件里），转 FAILED_PERMANENT 交人工")
-            store.failPermanently(storeKey, uuid, msg)
+            store.failPermanently(storeKey, ownerName, uuid, msg)
             return UploadResult.FailedPermanent(uuid, msg)
         }
 
@@ -574,17 +574,22 @@ class OutboxUploader(
      * ⚠ `MalformedResponse` 必须当"不知道"，不能当"没收下"——
      * 它是 **200 之后**解析失败，服务端极可能已经写进文件了。
      */
-    private suspend fun onFailure(storeKey: String, uuid: String, e: ApiError): UploadResult {
+    private suspend fun onFailure(
+        storeKey: String,
+        ownerName: String,
+        uuid: String,
+        e: ApiError,
+    ): UploadResult {
         val msg = e.message ?: e.javaClass.simpleName
         return when (e) {
             is ApiError.RateLimited -> retry(storeKey, uuid, msg, abortBatch = true)
             is ApiError.Unauthorized -> retry(storeKey, uuid, "需要重新登录：$msg", abortBatch = true)
             is ApiError.Forbidden -> retry(storeKey, uuid, "权限不足：$msg", abortBatch = true)
 
-            is ApiError.PayloadTooLarge -> giveUp(storeKey, uuid, "请求体超 20KB，应拆单而不是重试：$msg")
-            is ApiError.BadRequest -> giveUp(storeKey, uuid, "服务端拒绝（400）：$msg")
+            is ApiError.PayloadTooLarge -> giveUp(storeKey, ownerName, uuid, "请求体超 20KB，应拆单而不是重试：$msg")
+            is ApiError.BadRequest -> giveUp(storeKey, ownerName, uuid, "服务端拒绝（400）：$msg")
             // /add 的 404 只可能是接口路径不存在（部署/反代错了），重推无用。
-            is ApiError.NotFound -> giveUp(storeKey, uuid, "接口不存在（404）：$msg")
+            is ApiError.NotFound -> giveUp(storeKey, ownerName, uuid, "接口不存在（404）：$msg")
 
             is ApiError.ServerError -> {
                 // 500 的响应体只有一个追踪号。连时间一起记，否则事后对不上服务端日志。
@@ -604,9 +609,14 @@ class OutboxUploader(
         return UploadResult.RetryLater(uuid, error, abortBatch)
     }
 
-    private suspend fun giveUp(storeKey: String, uuid: String, error: String): UploadResult {
+    private suspend fun giveUp(
+        storeKey: String,
+        ownerName: String,
+        uuid: String,
+        error: String,
+    ): UploadResult {
         audit("/add 永久失败 uuid=$uuid：$error")
-        store.failPermanently(storeKey, uuid, error)
+        store.failPermanently(storeKey, ownerName, uuid, error)
         return UploadResult.FailedPermanent(uuid, error)
     }
 

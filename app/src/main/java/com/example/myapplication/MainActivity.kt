@@ -228,7 +228,16 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
             }
 
             composable(Screen.Stats.route) {
-                val viewModel = remember { StatsViewModel(locator.stats) }
+                val viewModel = remember {
+                    StatsViewModel(
+                        repo = locator.stats,
+                        includeFailed = { locator.settings.current().countFailedOrdersInRevenue },
+                    )
+                }
+                // 从设置页改完开关回来时要重新查一次。
+                // ⚠ 用 DisposableEffect 而不是 LaunchedEffect(Unit)：这一页每次切回来
+                // 都会重新进入组合，而开关可能刚刚在设置页被改过。
+                LaunchedEffect(Unit) { viewModel.refresh() }
                 StatsScreen(viewModel = viewModel)
             }
 

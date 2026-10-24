@@ -174,6 +174,7 @@ class SettingsStore(private val ds: DataStore<Preferences>) {
             notifyDisabledOverrides = p.eventSet(Keys.NOTIFY_DISABLED),
             notifyEnabledOverrides = p.eventSet(Keys.NOTIFY_ENABLED),
             loginMode = p.enumOr(Keys.LOGIN_MODE, s.loginMode),
+            countFailedOrdersInRevenue = p[Keys.COUNT_FAILED_IN_REVENUE] ?: s.countFailedOrdersInRevenue,
             lastStoreKey = p[Keys.LAST_STORE_KEY] ?: s.lastStoreKey,
             backgroundMode = p.enumOr(Keys.BACKGROUND_MODE, s.backgroundMode),
             printBarcode = p[Keys.PRINT_BARCODE] ?: s.printBarcode,
@@ -204,6 +205,7 @@ class SettingsStore(private val ds: DataStore<Preferences>) {
         p.putOrRemove(Keys.FREQ_THRESHOLD, next.freqThreshold, d.freqThreshold)
         p.putOrRemove(Keys.FREQ_WINDOW, next.freqWindow.name, d.freqWindow.name)
         p.putOrRemove(Keys.LOGIN_MODE, next.loginMode.name, d.loginMode.name)
+        p.putOrRemove(Keys.COUNT_FAILED_IN_REVENUE, next.countFailedOrdersInRevenue, d.countFailedOrdersInRevenue)
         p.putOrRemove(Keys.LAST_STORE_KEY, next.lastStoreKey, d.lastStoreKey)
         p.putOrRemove(Keys.BACKGROUND_MODE, next.backgroundMode.name, d.backgroundMode.name)
         p.putOrRemove(Keys.PRINT_BARCODE, next.printBarcode, d.printBarcode)
@@ -281,6 +283,7 @@ class SettingsStore(private val ds: DataStore<Preferences>) {
 
         val LOGIN_MODE = stringPreferencesKey("login_mode")
         val LAST_STORE_KEY = stringPreferencesKey("last_store_key")
+        val COUNT_FAILED_IN_REVENUE = booleanPreferencesKey("count_failed_orders_in_revenue")
 
         val BACKGROUND_MODE = stringPreferencesKey("background_mode")
 

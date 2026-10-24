@@ -60,6 +60,14 @@ class SettingsViewModel(private val settings: SettingsStore) : ViewModel() {
 
     fun setNotify(event: NotifyEvent, on: Boolean) = mutate { it.withNotify(event, on) }
 
+    /**
+     * 营业额算不算上传失败的订单。
+     *
+     * ⚠ 这只改一个**读取侧**的开关，不碰 `stats_contrib`。
+     * 靠改库实现的话，来回切几次之后任何一次搬错都会永久留在账上，而且看不出来。
+     */
+    fun setCountFailedInRevenue(on: Boolean) = mutate { it.copy(countFailedOrdersInRevenue = on) }
+
     private fun mutate(block: (AppSettings) -> AppSettings) {
         // mutate 是 suspend 的（DataStore 每次写都重写整个文件），不能在主线程直接调
         viewModelScope.launch { settings.mutate(block) }
@@ -123,6 +131,20 @@ fun SettingsScreen(viewModel: SettingsViewModel, shopName: String?, onSync: () -
                 Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+        Section("统计")
+        SwitchRow(
+            "营业额算上上传失败的订单",
+            s.countFailedOrdersInRevenue,
+        ) { viewModel.setCountFailedInRevenue(it) }
+        Text(
+            "默认算：货已经给客人了、钱真收了，不算的话当天对账会发现现金比营业额多，" +
+                "而不知道差在哪。只想看“成功进了系统的钱”就关掉。" +
+                "这个开关只影响显示，来回切不会改动任何账目数据。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Spacer(Modifier.height(16.dp))
         Section("通知")

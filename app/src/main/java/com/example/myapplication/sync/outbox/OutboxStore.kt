@@ -497,27 +497,78 @@ class OutboxStore(
      * 白烧三次 `attemptCount` 之后还是这里 —— 但那时用户已经等了三轮退避。
      * 413 的正确反应是**拆单**，而拆单发生在 [enqueue]，不是重试。
      */
-    suspend fun failPermanently(storeKey: String, orderUuid: String, error: String?): Int =
-        dao.transitionOutbox(
-            storeKey, orderUuid,
-            expectedState = OrderOutboxEntity.IN_FLIGHT,
-            toState = OrderOutboxEntity.FAILED_PERMANENT,
-            lastError = error,
-        )
+    suspend fun failPermanently(
+        storeKey: String,
+        ownerName: String,
+        orderUuid: String,
+        error: String?,
+    ): Int {
+        // 先读再翻：读到的 state 就是"贡献是按哪个桶加进去的"那一个。
+        val before = dao.outboxRow(storeKey, orderUuid) ?: return 0
+        var moved = 0
+        inTransaction {
+            moved = dao.transitionOutbox(
+                storeKey, orderUuid,
+                expectedState = OrderOutboxEntity.IN_FLIGHT,
+                toState = OrderOutboxEntity.FAILED_PERMANENT,
+                lastError = error,
+            )
+            // ⚠ 只有 CAS 真的命中（返回 1）才搬桶。
+            // 行已经不是 IN_FLIGHT（比如同一时刻被 promoteFromOutbox 提升了）的话，
+            // 搬桶就会把钱从一个错误的桶里减走 —— 而那边从来没加过。
+            if (moved == 1) {
+                moveScope(
+                    storeKey, ownerName, before,
+                    StatsProjection.OUTBOX_SCOPE, StatsProjection.OUTBOX_FAILED_SCOPE,
+                )
+            }
+        }
+        return moved
+    }
 
     // ==================== 内部 ====================
 
+    /**
+     * 给一行加/减贡献。**桶由 [StatsProjection.scopeOfOutboxState] 决定**，
+     * 不是这里硬编码 `OUTBOX_SCOPE`。
+     *
+     * ⚠ 加与减必须走同一个函数：`FAILED_PERMANENT` 的钱在 `OUTBOX_FAILED` 桶里，
+     * 删掉它时若还从 `OUTBOX` 桶减，就是一个桶永久多一笔、另一个永久少一笔 ——
+     * 差一分钱不会报错，只会让营业额偏掉，而且偏在哪一天、哪个人名下都查不出来。
+     */
     private suspend fun applyContribution(
         storeKey: String,
         ownerName: String,
         row: OrderOutboxEntity,
         sign: Int,
     ) {
+        val scope = StatsProjection.scopeOfOutboxState(row.state) ?: return
         val parts = OutboxContribution.partsOf(ownerName, row)
         val contribs = OutboxContribution.of(row, parts, timeZone())
         if (contribs.isEmpty()) return
         for (c in contribs) {
-            dao.applyContribDelta(storeKey, StatsProjection.OUTBOX_SCOPE, c.dimKey, c.metric, sign * c.value)
+            dao.applyContribDelta(storeKey, scope, c.dimKey, c.metric, sign * c.value)
+        }
+    }
+
+    /**
+     * 把一行的贡献从 [from] 桶搬到 [to] 桶（同一个 dimKey、同一批 metric）。
+     *
+     * 必须在**同一个事务**里做完：搬一半就是双算或漏算，而两者都只体现为
+     * "营业额对不上"，查不出是哪一笔。
+     */
+    private suspend fun moveScope(
+        storeKey: String,
+        ownerName: String,
+        row: OrderOutboxEntity,
+        from: String,
+        to: String,
+    ) {
+        if (from == to) return
+        val parts = OutboxContribution.partsOf(ownerName, row)
+        for (c in OutboxContribution.of(row, parts, timeZone())) {
+            dao.applyContribDelta(storeKey, from, c.dimKey, c.metric, -c.value)
+            dao.applyContribDelta(storeKey, to, c.dimKey, c.metric, +c.value)
         }
     }
 

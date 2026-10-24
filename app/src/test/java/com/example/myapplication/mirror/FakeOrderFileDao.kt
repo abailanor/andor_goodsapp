@@ -456,8 +456,12 @@ internal class FakeOrderFileDao : OrderFileDao {
         orders.values.count { it.storeKey == storeKey && it.orderTs == 0L }
 
     override suspend fun outboxContribSelfCheck(storeKey: String): Long {
+        // 与 SQL 一致：两个桶都算（OUTBOX 与 OUTBOX_FAILED）
         val bucket = contrib.values
-            .filter { it.storeKey == storeKey && it.scope == "OUTBOX" && it.metric == "amountCents" }
+            .filter {
+                it.storeKey == storeKey && it.metric == "amountCents" &&
+                    (it.scope == "OUTBOX" || it.scope == "OUTBOX_FAILED")
+            }
             .sumOf { it.value }
         val expected = outbox.values
             .filter {
@@ -520,6 +524,7 @@ internal class FakeOrderFileDao : OrderFileDao {
         storeKey: String,
         fromDate: String,
         toDate: String,
+        includeFailed: Boolean,
     ): Flow<List<ContribAggregate>> = flow {
         // ⚠ 与 SQL 保持一致的两点：**不筛 scope**（OUTBOX 与 FILE: 都算进营业额 —— 未上传的单
         // 货已经给客人了，不算的话用户开完单看统计没变，以为丢单），
@@ -528,7 +533,9 @@ internal class FakeOrderFileDao : OrderFileDao {
             contrib.values
                 .filter {
                     it.storeKey == storeKey &&
-                        it.dimKey.take(StatsProjection.DATE_WIDTH) in fromDate..toDate
+                        it.dimKey.take(StatsProjection.DATE_WIDTH) in fromDate..toDate &&
+                        // 与 SQL 的 `(:includeFailed = 1 OR scope <> 'OUTBOX_FAILED')` 一致
+                        (includeFailed || it.scope != StatsProjection.OUTBOX_FAILED_SCOPE)
                 }
                 .groupBy { it.dimKey to it.metric }
                 .map { (k, rows) -> ContribAggregate(k.first, k.second, rows.sumOf { it.value }) }

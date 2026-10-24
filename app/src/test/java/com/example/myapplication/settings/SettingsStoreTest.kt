@@ -147,6 +147,10 @@ class SettingsStoreTest {
             // 而"首次选择登录/离线要沿用"这条需求全靠它真的落盘。
             loginMode = LoginMode.AUTO,
             lastStoreKey = "00002",
+            // ⚠ 同样必须设成**非默认值**（默认是 true）。留成默认的话，
+            // 就算 writeAll 漏了这一项，读回来也是 true，测试照样绿 ——
+            // 而"营业额算不算上传失败的单"这个开关会静默失效，用户切了没反应。
+            countFailedOrdersInRevenue = false,
             backgroundMode = BackgroundMode.PERSISTENT_SERVICE,
             printBarcode = false,
             printShopName = "丽华金龙",

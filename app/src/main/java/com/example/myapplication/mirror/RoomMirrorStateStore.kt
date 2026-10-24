@@ -215,8 +215,16 @@ class RoomMirrorStateStore(
             audit("outbox 行 $orderUuid 处于 ${before.state}，未提升（已经提升过，或它还是草稿）")
             return
         }
-        for (c in OutboxContribution.of(before, parts, timeZone())) {
-            dao.applyContribDelta(storeKey, StatsProjection.OUTBOX_SCOPE, c.dimKey, c.metric, -c.value)
+        // ⚠ 从**这一行当初加进去的那个桶**减，不是硬编码 OUTBOX。
+        // `FAILED_PERMANENT` 的钱在 `OUTBOX_FAILED` 桶里（用户可以把上传失败的单
+        // 排除出营业额），而 `markOutboxPromoted` 的 SQL 允许 FAILED_PERMANENT 被提升 ——
+        // 那一单其实早就传上去了，只是本机之前判成了失败。
+        // 从错误的桶减会让 OUTBOX 桶留下一笔永远搬不走的钱，而 OUTBOX_FAILED 变成负数。
+        val scope = StatsProjection.scopeOfOutboxState(before.state)
+        if (scope != null) {
+            for (c in OutboxContribution.of(before, parts, timeZone())) {
+                dao.applyContribDelta(storeKey, scope, c.dimKey, c.metric, -c.value)
+            }
         }
     }
 

@@ -6,6 +6,7 @@ import com.example.myapplication.mirror.FakeOrderFileDao
 import com.example.myapplication.sync.OrderFileId
 import com.example.myapplication.sync.OrderPayloadIndex
 import com.example.myapplication.sync.StatsProjection
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -452,26 +453,84 @@ class OutboxStoreTest {
     fun `failPermanently_从_IN_FLIGHT_转_FAILED_PERMANENT_并对_READY_无效`() {
         val a = enqueue().rows.single().orderUuid
         takeOff(a)
-        assertEquals(1, runBlocking { store.failPermanently(storeKey, a, "413 请求体过大") })
+        assertEquals(1, runBlocking { store.failPermanently(storeKey, ownerName, a, "413 请求体过大") })
         assertEquals(OrderOutboxEntity.FAILED_PERMANENT, dao.outboxState(storeKey, a))
 
         val b = enqueue(req(lines = listOf(line(barcode = "6909999999999")))).rows.single().orderUuid
-        assertEquals(0, runBlocking { store.failPermanently(storeKey, b, "不该生效") })
+        assertEquals(0, runBlocking { store.failPermanently(storeKey, ownerName, b, "不该生效") })
         assertEquals(OrderOutboxEntity.READY, dao.outboxState(storeKey, b))
     }
 
     @Test
-    fun `FAILED_PERMANENT_的行仍然贡献统计_直到用户删掉它`() {
+    fun `FAILED_PERMANENT_的钱搬进_FAILED_桶_删掉时从那个桶减回来`() {
         // 货已经给客人了，钱真收了。是否计入营收由用户决定（设置里的开关），
-        // 存储层不替用户做这个判断 —— 所以这里断言的是"桶里还有这笔钱"。
+        // 而开关要能在**读取侧**生效，就必须先把这笔钱单独放一个桶。
         val uuid = enqueue().rows.single().orderUuid
         takeOff(uuid)
-        runBlocking { store.failPermanently(storeKey, uuid, "400") }
-
         assertEquals(5200L, outboxTotal(StatsProjection.METRIC_AMOUNT))
 
+        runBlocking { store.failPermanently(storeKey, ownerName, uuid, "400") }
+
+        // 搬走了：OUTBOX 归零、OUTBOX_FAILED 接住，**总额不变**
+        assertEquals(0L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(5200L, failedTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(1L, failedTotal(StatsProjection.METRIC_ORDERS))
+        assertEquals(14L, failedTotal(StatsProjection.METRIC_PIECES))
+
+        // ⚠ 删掉时必须从 FAILED 桶减。从 OUTBOX 减的话一个桶永久多一笔、
+        // 另一个永久少一笔 —— 差一分钱不会报错，只会让营业额偏掉。
         runBlocking { store.discard(storeKey, ownerName, uuid) }
         assertEquals(0L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(0L, failedTotal(StatsProjection.METRIC_AMOUNT))
+    }
+
+    @Test
+    fun `IN_FLIGHT_留在_OUTBOX_桶_不进_FAILED_桶`() {
+        // IN_FLIGHT 是"结果未知"，服务端很可能已经收下了。
+        // 记进失败桶的话，用户一关开关这笔钱就消失，而它其实已经在服务器上了。
+        val uuid = enqueue().rows.single().orderUuid
+        takeOff(uuid)
+
+        assertEquals(5200L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(0L, failedTotal(StatsProjection.METRIC_AMOUNT))
+    }
+
+    @Test
+    fun `FAILED_行之后被提升时_从_FAILED_桶减而不是从_OUTBOX_桶减`() {
+        // 那一单其实早就传上去了，只是本机之前判成了失败（比如 500 之后重推撞顶）。
+        // 从错误的桶减会让 OUTBOX 留下一笔永远搬不走的钱，而 OUTBOX_FAILED 变成负数。
+        val uuid = enqueue().rows.single().orderUuid
+        takeOff(uuid)
+        runBlocking { store.failPermanently(storeKey, ownerName, uuid, "到顶了") }
+        assertEquals(5200L, failedTotal(StatsProjection.METRIC_AMOUNT))
+
+        // 模拟 promoteFromOutbox 的减法（真实执行者是 RoomMirrorStateStore）
+        runBlocking {
+            val row = dao.outbox[storeKey to uuid]!!
+            val scope = StatsProjection.scopeOfOutboxState(row.state)
+            assertEquals(StatsProjection.OUTBOX_FAILED_SCOPE, scope)
+            for (c in OutboxContribution.of(row, OutboxContribution.partsOf(ownerName, row), utc)) {
+                dao.applyContribDelta(storeKey, scope!!, c.dimKey, c.metric, -c.value)
+            }
+            dao.markOutboxPromoted(storeKey, uuid)
+        }
+
+        assertEquals(0L, failedTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals("不该在 OUTBOX 桶里留下负数", 0L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+    }
+
+    @Test
+    fun `自检把两个桶都算上`() {
+        val a = enqueue().rows.single().orderUuid
+        val b = enqueue(req(lines = listOf(line(barcode = "6909999999999")))).rows.single().orderUuid
+        takeOff(b)
+        runBlocking { store.failPermanently(storeKey, ownerName, b, "413") }
+
+        // 一笔在 OUTBOX、一笔在 OUTBOX_FAILED，两笔都是 B 类未上传 → 自检必须为 0
+        assertEquals(0L, runBlocking { dao.outboxContribSelfCheck(storeKey) })
+        assertEquals(5200L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(5200L, failedTotal(StatsProjection.METRIC_AMOUNT))
+        assertNotNull(a)
     }
 
     @Test
@@ -484,7 +543,7 @@ class OutboxStoreTest {
             store.backToReady(storeKey, uuid, "429", countAttempt = false)
             store.takeOff(storeKey, uuid)
             store.noteUnknownResult(storeKey, uuid, "超时")
-            store.failPermanently(storeKey, uuid, "到顶了")
+            store.failPermanently(storeKey, ownerName, uuid, "到顶了")
         }
 
         // READY / IN_FLIGHT / FAILED_PERMANENT 都在贡献，只有 DRAFT 与 PROMOTED 不贡献。
@@ -492,10 +551,19 @@ class OutboxStoreTest {
         assertEquals(before, metrics())
     }
 
+    private fun failedTotal(metric: String) =
+        dao.contribTotal(storeKey, StatsProjection.OUTBOX_FAILED_SCOPE, metric)
+
+    /**
+     * 两个桶的合计。
+     *
+     * 状态迁移（READY → IN_FLIGHT → FAILED_PERMANENT）会在两个桶之间搬钱，
+     * 所以"迁移不动贡献"这条断言必须看**合计**，只看 OUTBOX 会误判成搬丢了。
+     */
     private fun metrics() = listOf(
-        outboxTotal(StatsProjection.METRIC_AMOUNT),
-        outboxTotal(StatsProjection.METRIC_ORDERS),
-        outboxTotal(StatsProjection.METRIC_PIECES),
+        outboxTotal(StatsProjection.METRIC_AMOUNT) + failedTotal(StatsProjection.METRIC_AMOUNT),
+        outboxTotal(StatsProjection.METRIC_ORDERS) + failedTotal(StatsProjection.METRIC_ORDERS),
+        outboxTotal(StatsProjection.METRIC_PIECES) + failedTotal(StatsProjection.METRIC_PIECES),
     )
 
     // ==================== refreshBlocked ====================
@@ -544,7 +612,7 @@ class OutboxStoreTest {
         val blocked = enqueue(missing = listOf("6901234567890")).rows.single().orderUuid
         val failed = enqueue(req(lines = listOf(line(barcode = "6909999999999")))).rows.single().orderUuid
         takeOff(failed)
-        runBlocking { store.failPermanently(storeKey, failed, "413") }
+        runBlocking { store.failPermanently(storeKey, ownerName, failed, "413") }
 
         val released = runBlocking { store.refreshBlocked(storeKey) { true } }
 
@@ -719,6 +787,31 @@ class OutboxStoreTest {
 
     private val colaMissing = "6901234567890"
     private val draftUuid = "88888888-7777-6666-5555-444444444444"
+
+    @Test
+    fun `统计查询能只按开关排除_FAILED_桶_而不动库`() {
+        val ok = enqueue().rows.single().orderUuid
+        val bad = enqueue(req(lines = listOf(line(barcode = "6909999999999")))).rows.single().orderUuid
+        takeOff(bad)
+        runBlocking { store.failPermanently(storeKey, ownerName, bad, "413") }
+        assertNotNull(ok)
+
+        val withFailed = runBlocking {
+            dao.observeContribInRange(storeKey, "2026-09-01", "2026-09-30", includeFailed = true).first()
+        }
+        val withoutFailed = runBlocking {
+            dao.observeContribInRange(storeKey, "2026-09-01", "2026-09-30", includeFailed = false).first()
+        }
+
+        fun amount(rows: List<com.example.myapplication.db.ContribAggregate>) =
+            rows.filter { it.metric == StatsProjection.METRIC_AMOUNT }.sumOf { it.total }
+
+        // 开关是**读取侧**的事：两次查询之间库一个字节都没变，
+        // 所以来回切多少次都不会漂移。靠改库实现的话，任何一次搬错都会永久留在账上。
+        assertEquals(10_400L, amount(withFailed))
+        assertEquals(5_200L, amount(withoutFailed))
+        assertEquals(5_200L, failedTotal(StatsProjection.METRIC_AMOUNT))
+    }
 
     // ==================== splitCsv ====================
 

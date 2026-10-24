@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import java.text.SimpleDateFormat
@@ -47,6 +48,13 @@ enum class StatsRange(val label: String) {
 
 class StatsViewModel(
     private val repo: StatsRepository,
+    /**
+     * 营业额里算不算**上传失败**的订单。来自 `AppSettings.countFailedOrdersInRevenue`。
+     *
+     * 做成 provider 而不是构造时读一次：用户在设置里改完，回到这一页就该立刻生效，
+     * 不必重建 ViewModel。
+     */
+    private val includeFailed: () -> Boolean = { true },
     private val timeZone: () -> TimeZone = { TimeZone.getDefault() },
     private val now: () -> Long = { System.currentTimeMillis() },
 ) : ViewModel() {
@@ -54,15 +62,24 @@ class StatsViewModel(
     private val _range = MutableStateFlow(StatsRange.MONTH)
     val range: StateFlow<StatsRange> = _range.asStateFlow()
 
-    val summary: StateFlow<StatsRepository.Summary?> = _range
-        .flatMapLatest { r ->
-            val (from, to) = bounds(r)
-            repo.summary(from, to)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    /** 用户切换开关时 bump 一下，让下面的 flow 重新查询。 */
+    private val _revision = MutableStateFlow(0)
+
+    val summary: StateFlow<StatsRepository.Summary?> =
+        combine(_range, _revision) { r, _ -> r }
+            .flatMapLatest { r ->
+                val (from, to) = bounds(r)
+                repo.summary(from, to, includeFailed())
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun setRange(r: StatsRange) {
         _range.value = r
+    }
+
+    /** 设置页改完开关回到这一页时调。 */
+    fun refresh() {
+        _revision.value++
     }
 
     /** 闭区间 `[fromDate, toDate]`，`yyyy-MM-dd`。 */

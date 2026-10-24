@@ -382,9 +382,12 @@ class StatsRepository(
 
     /**
      * @param fromDate / @param toDate `yyyy-MM-dd`，**闭区间**（SQL 的 BETWEEN）。
+     * @param includeFailed 营业额里算不算**上传失败**的订单（`OUTBOX_FAILED` 桶）。
+     *        来自 `AppSettings.countFailedOrdersInRevenue`，默认 true。
+     *        ⚠ 这是纯读取侧的开关，切换它**不写库** —— 见 `observeContribInRange` 的注释。
      */
-    fun summary(fromDate: String, toDate: String): Flow<Summary> =
-        dao.observeContribInRange(storeKey(), fromDate, toDate)
+    fun summary(fromDate: String, toDate: String, includeFailed: Boolean = true): Flow<Summary> =
+        dao.observeContribInRange(storeKey(), fromDate, toDate, includeFailed)
             .combine(dao.observeFileStates(storeKey())) { rows, states ->
                 summarize(rows, states, ownerName(), fromDate, toDate)
             }

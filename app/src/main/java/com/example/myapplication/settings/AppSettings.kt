@@ -131,6 +131,17 @@ data class AppSettings(
     val loginMode: LoginMode = LoginMode.ASK,
 
     /**
+     * 营业额里**算不算上传失败的订单**（`FAILED_PERMANENT`：重推到顶 / 413 / 400）。
+     *
+     * **默认算**：货已经给客人了、钱真收了，不算的话店主当天对账会发现现金比营业额多，
+     * 而他不知道差在哪。想只看"成功进了系统的钱"的人可以关掉。
+     *
+     * ⚠ 这个开关只在**读取侧**生效（`observeContribInRange` 的 `includeFailed`），
+     * 切换它不写库。靠改库实现的话，来回切几次之后任何一次搬错都会永久留在账上。
+     */
+    val countFailedOrdersInRevenue: Boolean = true,
+
+    /**
      * 上一次活动的店铺（merchantCode）。空串 = 这台设备从没成功登录过。
      *
      * ## 为什么必须持久化

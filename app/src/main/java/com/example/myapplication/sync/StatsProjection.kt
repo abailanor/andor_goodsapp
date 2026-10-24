@@ -68,6 +68,50 @@ object StatsProjection {
      */
     const val OUTBOX_SCOPE = "OUTBOX"
 
+    /**
+     * **上传失败**的未上传订单单独一个桶。
+     *
+     * ## 为什么要分开
+     *
+     * 用户要一个开关："是否把上传失败的订单计入销售额"（默认计入 —— 货已经给客人了，
+     * 钱真收了）。但 `stats_contrib` 是按 dimKey 聚合的，一旦混进 [OUTBOX_SCOPE]，
+     * **读取侧就再也分不出来**了：同一天的 `OUTBOX` 桶里既有等着上传的、
+     * 也有重推三次失败的，开关切换时无法只把后者挑出来。
+     *
+     * 分成两个桶之后，开关变成纯读取侧的事（`observeContribInRange` 要不要带上这个 scope），
+     * **切换开关不写库**，来回切多少次都不会漂移。
+     *
+     * ## ⚠ 加减两侧必须由同一个函数决定桶
+     *
+     * 见 [scopeOfOutboxState]。加的时候放 A 桶、减的时候从 B 桶减，
+     * 结果是一个桶永久多一笔、另一个永久少一笔 —— 差一分钱不会报错，
+     * 只会让营业额偏掉，而且偏在哪一天、哪个人名下都查不出来。
+     */
+    const val OUTBOX_FAILED_SCOPE = "OUTBOX_FAILED"
+
+    /**
+     * 一笔 outbox 行的贡献该记在哪个桶。**加与减都必须走这里。**
+     *
+     * @return null 表示这一行**不贡献**（不是"贡献为 0"）。
+     *         调用方对 null 什么都不做 —— 用 0 代替会在 `stats_contrib` 里
+     *         多出一堆值为 0 的行，把自检查询淹掉。
+     *
+     * | 状态 | 桶 | 理由 |
+     * |---|---|---|
+     * | `DRAFT` | null | 连"成交了吗"都没确定，算进去的话开单页每加一行营业额就跳一下 |
+     * | `PROMOTED` | null | 钱已经在 `FILE:` 桶里了，再算一遍就是双算 |
+     * | `FAILED_PERMANENT` | [OUTBOX_FAILED_SCOPE] | 可以被开关排除 |
+     * | 其余（READY / IN_FLIGHT / BLOCKED） | [OUTBOX_SCOPE] | 货已经给客人了，必须看得见 |
+     *
+     * ⚠ `IN_FLIGHT` 记在 [OUTBOX_SCOPE]：它是"结果未知"，服务端很可能已经收下了。
+     * 记进失败桶的话，用户一关开关这笔钱就消失，而它其实已经在服务器上了。
+     */
+    fun scopeOfOutboxState(state: String): String? = when (state) {
+        "DRAFT", "PROMOTED" -> null
+        "FAILED_PERMANENT" -> OUTBOX_FAILED_SCOPE
+        else -> OUTBOX_SCOPE
+    }
+
     private const val FILE_SCOPE_PREFIX = "FILE:"
 
     /** dimKey 里 writer 维度的前缀。 */
