@@ -3,6 +3,7 @@ package com.example.myapplication.ui.orders
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myapplication.data.DriftedOrder
+import com.example.myapplication.data.OrderCalendar
 import com.example.myapplication.data.OrderDetail
 import com.example.myapplication.data.OrderRepository
 import com.example.myapplication.data.OrderRow
@@ -21,29 +22,121 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.TimeZone
 
-/** 列表的时间范围。 */
-enum class OrderRange(val label: String) {
-    TODAY("今天"),
-    MONTH("本月"),
-    YEAR("近一年"),
-    ;
+/**
+ * 订单页的时间范围。
+ *
+ * ## 为什么是 sealed class 而不是「今天 / 本月 / 近一年」三个枚举值
+ *
+ * 用户要的是"点开只列出**数据库里实际存在**的年份/月份"，还要一个月历能直接点某一天。
+ * 固定的三个枚举值做不到这两件事：`YEAR` 是"最近 12 个月"（含一堆没单的月份），
+ * 而"2025 年 3 月"这种具体区间根本没有对应的枚举值。
+ *
+ * 所以区间本身成为值：[Year] / [Month] / [Day] 各自带具体的年月日，
+ * 选择器只从 [OrderCalendar.years] / `monthsOf()` / `daysOf()` 里取**真的有单的**那些。
+ */
+sealed class OrderPeriod {
 
     /** 半开区间 `[from, to)`。 */
-    fun bounds(now: Long, tz: TimeZone): Pair<Long, Long> {
-        val cal = Calendar.getInstance(tz).apply { timeInMillis = now }
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-        val from = when (this) {
-            TODAY -> cal.timeInMillis
-            MONTH -> cal.apply { set(Calendar.DAY_OF_MONTH, 1) }.timeInMillis
-            // 近一年：往前推 11 个月再取当月 1 号，一共 12 个月
-            YEAR -> cal.apply { add(Calendar.MONTH, -11); set(Calendar.DAY_OF_MONTH, 1) }.timeInMillis
+    abstract fun bounds(now: Long, tz: TimeZone): Pair<Long, Long>
+
+    /** 按钮上显示的文字。 */
+    abstract fun label(now: Long, tz: TimeZone): String
+
+    /**
+     * 今天。
+     *
+     * 单独留一个值（而不是每次构造 [Day]）是因为它要**跟着时钟走**：
+     * 收银台可能连着开一整天，界面停在昨天会很莫名其妙。
+     */
+    data object Today : OrderPeriod() {
+        override fun bounds(now: Long, tz: TimeZone): Pair<Long, Long> =
+            startOfDay(now, tz) to upperBound(now)
+
+        override fun label(now: Long, tz: TimeZone) = "今天"
+    }
+
+    data class Day(val year: Int, val month: Int, val day: Int) : OrderPeriod() {
+        override fun bounds(now: Long, tz: TimeZone): Pair<Long, Long> {
+            val cal = Calendar.getInstance(tz)
+            cal.clear()
+            cal.set(year, month - 1, day, 0, 0, 0)
+            val from = cal.timeInMillis
+            cal.add(Calendar.DAY_OF_MONTH, 1)
+            return from to cal.timeInMillis
         }
-        // 上界给"现在 + 1 天"而不是"明天 0 点"：补传的历史订单 orderTs 可能落在未来
-        // （设备时钟被调过），卡太紧会让它们从列表里消失，而用户看不出为什么少了一笔。
-        return from to now + 86_400_000L
+
+        override fun label(now: Long, tz: TimeZone): String {
+            val (from, _) = bounds(now, tz)
+            return if (from == startOfDay(now, tz)) "今天" else "${year}年${month}月${day}日"
+        }
+    }
+
+    data class Month(val year: Int, val month: Int) : OrderPeriod() {
+        override fun bounds(now: Long, tz: TimeZone): Pair<Long, Long> {
+            val cal = Calendar.getInstance(tz)
+            cal.clear()
+            cal.set(year, month - 1, 1, 0, 0, 0)
+            val from = cal.timeInMillis
+            cal.add(Calendar.MONTH, 1)
+            return from to cal.timeInMillis
+        }
+
+        override fun label(now: Long, tz: TimeZone): String {
+            val cal = Calendar.getInstance(tz).apply { timeInMillis = now }
+            return if (year == cal.get(Calendar.YEAR) && month == cal.get(Calendar.MONTH) + 1) {
+                "本月"
+            } else {
+                "${year}年${month}月"
+            }
+        }
+    }
+
+    data class Year(val year: Int) : OrderPeriod() {
+        override fun bounds(now: Long, tz: TimeZone): Pair<Long, Long> {
+            val cal = Calendar.getInstance(tz).apply { clear(); set(year, 0, 1, 0, 0, 0) }
+            val from = cal.timeInMillis
+            cal.add(Calendar.YEAR, 1)
+            return from to cal.timeInMillis
+        }
+
+        override fun label(now: Long, tz: TimeZone): String {
+            val cal = Calendar.getInstance(tz).apply { timeInMillis = now }
+            return if (year == cal.get(Calendar.YEAR)) "今年" else "${year}年"
+        }
+    }
+
+    /**
+     * 全部。
+     *
+     * ⚠ 下界是 **1** 而不是 0：`orderTs == 0` 表示"别的客户端没写 `content.ts`，时间是猜的"
+     * （`StatsProjection.effectiveTs` 用文件月份兜底，但那一列本身仍然是 0）。
+     * 把它们算进"全部"的话，列表最底下会堆着一批 1970-01-01 的单，
+     * 而用户看不出那是"时间未知"还是"系统坏了"。日历那侧也排除它们，两边口径一致。
+     */
+    data object All : OrderPeriod() {
+        override fun bounds(now: Long, tz: TimeZone): Pair<Long, Long> = 1L to upperBound(now)
+
+        override fun label(now: Long, tz: TimeZone) = "全部"
+    }
+
+    companion object {
+        /** 上界给"现在 + 1 天"而不是"明天 0 点"：补传的历史订单 `orderTs` 可能落在未来。 */
+        fun upperBound(now: Long): Long = now + 86_400_000L
+
+        fun startOfDay(now: Long, tz: TimeZone): Long =
+            Calendar.getInstance(tz).apply {
+                timeInMillis = now
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+        /** 冷启动的默认范围 = 本月。 */
+        fun thisMonth(now: Long, tz: TimeZone): Month =
+            Calendar.getInstance(tz).apply { timeInMillis = now }.let {
+                Month(it.get(Calendar.YEAR), it.get(Calendar.MONTH) + 1)
+            }
     }
 }
 
@@ -77,8 +170,17 @@ class OrdersViewModel(
     private val _drift = MutableStateFlow<List<DriftedOrder>>(emptyList())
     val drift: StateFlow<List<DriftedOrder>> = _drift.asStateFlow()
 
-    private val _range = MutableStateFlow(OrderRange.MONTH)
-    val range: StateFlow<OrderRange> = _range.asStateFlow()
+    private val _period = MutableStateFlow<OrderPeriod>(OrderPeriod.thisMonth(now(), timeZone()))
+    val period: StateFlow<OrderPeriod> = _period.asStateFlow()
+
+    /**
+     * 按天聚合的日历。期间选择器用它列出"真的有单的年/月"，月历用它点亮有单的格子。
+     *
+     * 初始值是一个**空日历**（不是 null）：选择器打开时它可能还没查完，
+     * 空列表只是"暂时没有可选项"，而 null 会让整个对话框闪一下或者干脆不显示。
+     */
+    val calendar: StateFlow<OrderCalendar> = repo.calendar(timeZone())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OrderCalendar.EMPTY)
 
     /** 只按店员筛。null = 全部人。 */
     private val _writer = MutableStateFlow<String?>(null)
@@ -109,7 +211,7 @@ class OrdersViewModel(
     }
 
     val rows: StateFlow<List<OrderRow>> =
-        combine(_range, _writer, _fileType) { r, w, t -> Triple(r, w, t) }
+        combine(_period, _writer, _fileType) { r, w, t -> Triple(r, w, t) }
             .flatMapLatest { (r, w, t) ->
                 val (from, to) = r.bounds(now(), timeZone())
                 repo.orders(from, to, w).map { rows ->
@@ -130,9 +232,32 @@ class OrdersViewModel(
         _detail.value = null
     }
 
-    fun setRange(r: OrderRange) {
-        _range.value = r
+    fun setPeriod(p: OrderPeriod) {
+        _period.value = p
+        // 换了时间范围，之前勾的那些行大概率已经不在列表里了。
+        // 留着的话"已选 N 笔"这个数字会指着一批用户看不见的订单，
+        // 而"上传选中"照样会把它们发出去。
+        _selected.value = emptySet()
     }
+
+    /** 按钮上显示的那行字。 */
+    fun periodLabel(): String = _period.value.label(now(), timeZone())
+
+    /**
+     * 选择器顶部的快捷项。
+     *
+     * 放在 ViewModel 里而不是界面里，是因为"本月"要知道**现在**是哪个月 ——
+     * 而 `now()` / `timeZone()` 是这个类的构造参数（测试里被替换掉）。
+     * 让界面自己 `Calendar.getInstance()` 的话，测试就测不到它，
+     * 而且界面与列表区间会用上两个不同的"现在"。
+     */
+    fun quickPeriods(): List<OrderPeriod> = listOf(
+        OrderPeriod.Today,
+        OrderPeriod.thisMonth(now(), timeZone()),
+        OrderPeriod.All,
+    )
+
+    fun periodLabelOf(p: OrderPeriod): String = p.label(now(), timeZone())
 
     fun setWriter(w: String?) {
         _writer.value = w

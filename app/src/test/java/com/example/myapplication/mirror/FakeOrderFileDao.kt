@@ -2,6 +2,7 @@ package com.example.myapplication.mirror
 
 import com.example.myapplication.db.ContribAggregate
 import com.example.myapplication.db.FileStateEntity
+import com.example.myapplication.db.OrderDayRow
 import com.example.myapplication.db.OrderFileDao
 import com.example.myapplication.db.OrderGroupEntity
 import com.example.myapplication.db.OrderIndexEntity
@@ -512,6 +513,16 @@ internal class FakeOrderFileDao : OrderFileDao {
 
     override fun observeOutboxPending(storeKey: String): Flow<List<OrderOutboxEntity>> = flow {
         emit(outboxPending(storeKey))
+    }
+
+    override fun observeOrderDayRows(storeKey: String): Flow<List<OrderDayRow>> = flow {
+        // 与 SQL 一致：`WHERE storeKey = ? AND orderTs > 0`（orderTs = 0 表示时间未知，
+        // 画进日历会堆在 1970-01-01 那格上）。
+        emit(
+            orders.values
+                .filter { it.storeKey == storeKey && it.orderTs > 0L }
+                .map { OrderDayRow(it.orderTs, it.totalCents, it.status, it.fileId) }
+        )
     }
 
     override suspend fun orderItemsOfUuid(storeKey: String, orderUuid: String): List<OrderItemIndexEntity> =

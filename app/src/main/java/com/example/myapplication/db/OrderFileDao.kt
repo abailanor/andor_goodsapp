@@ -851,6 +851,44 @@ interface OrderFileDao {
     suspend fun orderItemsOfUuid(storeKey: String, orderUuid: String): List<OrderItemIndexEntity>
 
     /**
+     * 已同步区里**每一笔订单**的日期聚合原料：时间、金额、状态、文件类型。
+     *
+     * ## 给「订单页」的日历用，不是给统计用
+     *
+     * 统计一律走 [observeContribInRange]（`stats_contrib`，增量维护、有自检）。
+     * 这条查询是另一件事：日历要知道**哪些天有单**、以及点开某天时那一天有几笔 ——
+     *
+     * 返回 `Flow` 而不是 `suspend`：后台同步随时可能落地一笔新订单，
+     * 日历上"今天有 3 笔"必须自己变成 4 笔。用 suspend 的话就得有人记得去刷，
+     * 忘了就是"我刚开的单在日历上看不见"。
+     * 而"只列出库里真实存在的年/月"这个需求没法从贡献行反推
+     * （贡献行只有 B 类，A 类进货单不产出贡献，见 `StatsProjection.contributionOf`）。
+     *
+     * ## ⚠ 为什么把分桶放在 Kotlin 而不是 SQL
+     *
+     * 按日分桶要用**设备时区**，而 SQLite 的 `strftime(…, 'localtime')` 用的是
+     * 进程时区、`unixepoch` 是 UTC，两边都可能与 `StatsProjection.dateKey` 不一致 ——
+     * 差一天就是一笔订单从日历上"消失"，而它明明在列表里。
+     * 所以这里只取原始 `orderTs`，分桶一律走 [com.example.myapplication.sync.StatsProjection.dateKey]，
+     * 与统计、与列表区间用的是同一套日期算法。
+     *
+     * ## ⚠ 排除 `orderTs = 0`
+     *
+     * 那是"别的客户端没写 `content.ts`"的订单，时间只能用文件月份兜底猜。
+     * 把它们画进日历等于在 1970-01-01 那格上堆一堆单，而用户看不出那是猜的。
+     * 它们仍然在订单列表里（列表按 `orderTs` 区间过滤，同样看不到 —— 那是已知代价，
+     * `countOrdersMissingTs` 让诊断页能报出来）。
+     */
+    @Query(
+        """
+        SELECT orderTs AS orderTs, totalCents AS totalCents, status AS status, fileId AS fileId
+        FROM order_index
+        WHERE storeKey = :storeKey AND orderTs > 0
+        """
+    )
+    fun observeOrderDayRows(storeKey: String): Flow<List<OrderDayRow>>
+
+    /**
      * 按 `dimKey`（`<yyyy-MM-dd>|w:<writer>`）与 `metric` 聚合的贡献合计。
      *
      * ## 为什么用 `substr(dimKey, 1, 10)` 裁区间
@@ -895,6 +933,21 @@ interface OrderFileDao {
         includeFailed: Boolean,
     ): Flow<List<ContribAggregate>>
 }
+
+/**
+ * [OrderFileDao.orderDayRows] 的一行 = 一笔已同步订单的日历原料。
+ *
+ * 只取四列：日历要的是"哪天、多少钱、算不算数、是不是进货"，
+ * 把整行 `OrderIndexEntity` 拉出来（含三个偏移列）在几万笔订单上是白白的内存。
+ */
+data class OrderDayRow(
+    val orderTs: Long,
+    val totalCents: Long,
+    /** `1` 正常 / `0` 已取消 / `2` 已完成（仅 A 类）/ `3` 已完成后被删除（仅 A 类）。 */
+    val status: Int,
+    /** 用来判 A/B：`fileId` 以 `A:` 或 `B:` 开头（`OrderFileId.isRevenueFile`）。 */
+    val fileId: String,
+)
 
 /** [OrderFileDao.observeContribInRange] 的一行。`SUM()` 分组后每组至少有一行，不可能为 NULL。 */
 data class ContribAggregate(

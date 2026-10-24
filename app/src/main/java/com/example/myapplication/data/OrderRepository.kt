@@ -136,6 +136,30 @@ class OrderRepository(
     }
 
     /**
+     * 按天聚合的订单日历。**「订单」页的期间选择器与月历都读它。**
+     *
+     * @param timeZone 分桶用的时区。必须与统计页用的是同一个（都走 `StatsProjection.dateKey`），
+     *        否则会出现"日历上那天有 3 笔、统计页那天是 2 笔"。
+     */
+    fun calendar(timeZone: TimeZone): Flow<OrderCalendar> {
+        val key = storeKey()
+        return combine(
+            dao.observeOrderDayRows(key),
+            dao.observeOutboxPending(key),
+        ) { synced, pending ->
+            OrderCalendar.of(
+                synced = synced,
+                // PROMOTED 的行保留不删（是"这个 uuid 已上传"的唯一凭据），
+                // 但它们对应的订单已经在 order_index 里了 —— 两边都算就是同一笔数两遍。
+                pending = pending
+                    .filter { it.state != OrderOutboxEntity.PROMOTED && it.orderTs > 0L }
+                    .map { OrderOutboxRow(it.orderTs, it.totalCents, it.fileType) },
+                timeZone = timeZone,
+            )
+        }
+    }
+
+    /**
      * 上传选中的订单。**只发 [OrderRow.Source.PENDING_READY] 的那些**，其余静默跳过并记审计。
      *
      * 逐个串行发，不并发：429 的桶按 IP 共享，一次并发十笔等于自己把自己锁死。

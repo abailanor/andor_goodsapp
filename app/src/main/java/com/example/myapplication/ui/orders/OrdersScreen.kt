@@ -27,6 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -54,7 +57,10 @@ import java.util.Locale
 @Composable
 fun OrdersScreen(viewModel: OrdersViewModel) {
     val rows by viewModel.rows.collectAsState()
-    val range by viewModel.range.collectAsState()
+    val period by viewModel.period.collectAsState()
+    val calendar by viewModel.calendar.collectAsState()
+    // 期间选择器。null = 关着。⚠ 用 Boolean + 内部状态会让"选完就关"这件事散在三个地方。
+    var showPeriodPicker by remember { mutableStateOf(false) }
     val selected by viewModel.selected.collectAsState()
     val busy by viewModel.busy.collectAsState()
     val report by viewModel.report.collectAsState()
@@ -74,14 +80,13 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
     val foreign = rows.count { it.isForeign && it.source.isPending }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (r in OrderRange.entries) {
-                FilterChip(
-                    selected = range == r,
-                    onClick = { viewModel.setRange(r) },
-                    label = { Text(r.label) },
-                )
-            }
+        // ⚠ 时间范围是**一个按钮**，不是三个 chip。
+        //
+        // chip 的问题不在于占地方，而在于它只能表达"今天/本月/近一年"这三个写死的区间：
+        // 用户想看"2025 年 3 月"或者"上上星期二"就没门，而"近一年"里绝大多数月份是空的。
+        // 点开之后的选择器**只列数据库里真的有单的年/月**，最后落到一张月历上点具体某天。
+        OutlinedButton(onClick = { showPeriodPicker = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("时间：${viewModel.periodLabel()}")
         }
 
         Spacer(Modifier.height(6.dp))
@@ -226,6 +231,18 @@ fun OrdersScreen(viewModel: OrdersViewModel) {
         detail?.let { d ->
             OrderDetailDialog(detail = d, onDismiss = { viewModel.closeDetail() })
         }
+    }
+
+    if (showPeriodPicker) {
+        PeriodPickerDialog(
+            calendar = calendar,
+            current = period,
+            onPick = {
+                viewModel.setPeriod(it)
+                showPeriodPicker = false
+            },
+            onDismiss = { showPeriodPicker = false },
+        )
     }
 }
 
