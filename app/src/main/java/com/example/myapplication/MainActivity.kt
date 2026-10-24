@@ -235,6 +235,7 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
             composable(Screen.More.route) {
                 MoreScreen(
                     state = locator.sessions.state,
+                    hotspot = locator.hotspotSync,
                     onLogin = { navController.navigate(Screen.Login.route) { launchSingleTop = true } },
                     onSettings = { navController.navigate(Screen.Settings.route) { launchSingleTop = true } },
                     onPendingOrders = {

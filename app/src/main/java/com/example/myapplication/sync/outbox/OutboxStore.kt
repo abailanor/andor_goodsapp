@@ -339,6 +339,109 @@ class OutboxStore(
         return released
     }
 
+    // ==================== 热点同步：接收别的设备的单 ====================
+
+    /** [adoptForeign] 的结果。 */
+    data class AdoptReport(
+        /** 真的插进来的行数。 */
+        val inserted: Int,
+        /** 本地已经有了、跳过的行数（不是错误：同一批数据被同步两次是正常情况）。 */
+        val skipped: Int,
+        /**
+         * 同一个 uuid 但 payload **字节不同**的行。
+         *
+         * ⚠ 这是严重不一致：payload 一次写入不可变，两台设备手上同一个 uuid 的字节
+         * 应当逐字节相同（其中一台是从另一台同步来的）。不同就说明有一边被改过 ——
+         * 而"发出去的字节与库里存的字节不一致"会让所有偏移作废，且没有任何机制会报错。
+         * 这种情况下**保留本地那份**（它可能已经发出去过了），但要大声记审计。
+         */
+        val payloadConflicts: List<String>,
+    )
+
+    /**
+     * 接收一批从别的设备热点同步过来的 outbox 行。
+     *
+     * ## ⚠ 必须走这里，不能直接 `dao.insertOutbox`
+     *
+     * 插一行未上传的订单，同时意味着**这个店的营业额多了一笔**（货已经给客人了，
+     * 只是还没传上去）。`OUTBOX` 桶必须跟着加，否则：
+     *  - 统计少一笔，而用户看不出少的是哪一笔；
+     *  - 更糟的是这一行之后被提升时，`promoteFromOutbox` 会从 `OUTBOX` 桶**减**走
+     *    一笔从来没加进去的钱 → 桶变成负数 → 营业额永久偏小，且 `statsSelfCheck`
+     *    查不出来（它比的是 contrib 与 agg，两边都错就互相抵消）。
+     *
+     * 加与减必须走同一个纯函数 [OutboxContribution.of]，理由见它的类注释。
+     *
+     * ## ⚠ 只接收**未上传**的行，不接收 PROMOTED
+     *
+     * 热点协议不传"已上传"这个状态。B 设备要知道 A 已经传了某笔单，
+     * 正确的途径是**同步那个文件**：ADD 消息到达 → `applyAdded` → `promoteFromOutbox`，
+     * 那条路径会同时把偏移、索引行、统计桶三件事一起做对。
+     * 让热点协议直接改状态就等于开了第二个搬桶入口，而两处的幂等判据不同 ——
+     * 结果要么双算要么漏算，两种都静默。
+     *
+     * ## 幂等
+     *
+     * 同一批数据被同步两次是正常情况（用户可能连了两回热点）。
+     * 已存在的 uuid 一律跳过，**不覆盖状态也不覆盖 payload**：
+     * 本地那份的状态可能已经比对方新（比如本地已经 IN_FLIGHT 了）。
+     */
+    suspend fun adoptForeign(
+        storeKey: String,
+        ownerName: String,
+        incoming: List<OrderOutboxEntity>,
+    ): AdoptReport {
+        var inserted = 0
+        var skipped = 0
+        val conflicts = ArrayList<String>()
+
+        inTransaction {
+            for (row in incoming) {
+                if (row.state == OrderOutboxEntity.PROMOTED) {
+                    // 不该出现在 payload 里（发送侧已经过滤），真出现了就跳过：
+                    // 提升状态只能由同步路径来写，见上面的注释。
+                    skipped++
+                    continue
+                }
+                val existing = dao.outboxRow(storeKey, row.orderUuid)
+                if (existing != null) {
+                    skipped++
+                    if (!existing.payload.contentEquals(row.payload)) {
+                        conflicts += row.orderUuid
+                        audit("⚠ 热点同步：uuid ${row.orderUuid} 两边 payload 不一致。" +
+                            "保留本地那份（它可能已经发出去过），对方 ${row.payload.size} 字节 / " +
+                            "本地 ${existing.payload.size} 字节。这说明有一边的字节被改过")
+                    }
+                    continue
+                }
+                // 外来的行要盖上**本机的**接收痕迹吗？不 —— originDevice 必须保持
+                // 创建者的 id，否则下一次热点同步就分不清谁该自动上传它了。
+                dao.insertOutbox(row)
+                applyContribution(storeKey, ownerName, row, +1)
+                inserted++
+                if (row.groupId.isNotEmpty()) {
+                    dao.recomputeOrderGroup(
+                        storeKey,
+                        OutboxContribution.partsOf(ownerName, row).fileId,
+                        row.groupId,
+                        now(),
+                    )
+                }
+            }
+        }
+        if (inserted > 0) audit("热点同步接收了 $inserted 笔未上传订单（跳过 $skipped 笔已有的）")
+        return AdoptReport(inserted, skipped, conflicts)
+    }
+
+    /**
+     * 把本机**未上传**的行导出成可以发给别的设备的形状。
+     *
+     * ⚠ 排除 `PROMOTED`，理由见 [adoptForeign]：状态只能由同步路径写。
+     * ⚠ 也排除 `DRAFT`：草稿连"成交了吗"都没确定，传过去会让对方算进营业额。
+     */
+    suspend fun exportForPeer(storeKey: String): List<OrderOutboxEntity> =
+        dao.outboxPending(storeKey).filter { it.state != OrderOutboxEntity.DRAFT }
+
     // ==================== 状态机（不碰贡献） ====================
     //
     // 下面这几个方法**都不改统计**：`READY` / `IN_FLIGHT` / `FAILED_PERMANENT` 三种状态

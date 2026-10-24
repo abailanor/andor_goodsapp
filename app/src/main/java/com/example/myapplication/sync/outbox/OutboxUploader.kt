@@ -276,6 +276,80 @@ class OutboxUploader(
         return report
     }
 
+    /**
+     * 手动上传用户**明确勾选**的那几笔（「订单」页）。
+     *
+     * ## ⚠ 这里也必须先同步，而且比 [uploadReady] 更要紧
+     *
+     * 勾选清单里最典型的就是"接管别的设备传来的单"。而那笔单**很可能创建它的设备
+     * 已经上传过了** —— 热点同步只发生在两台设备都离线的时候，之后谁先上线谁就传了。
+     * 不同步就直接发，服务端不查重 → 同一个 uuid 两行 → 库存扣两次 → 镜像比服务器长。
+     *
+     * 同步之后重读每一行的状态：已经变成 `PROMOTED` 的就跳过（`takeOff` 的 CAS
+     * 也会挡住，但那样会白记一次"Skipped"，用户看到"跳过 3 笔"会以为出了什么问题）。
+     */
+    suspend fun uploadSelected(
+        storeKey: String,
+        ownerName: String,
+        orderUuids: List<String>,
+    ): List<UploadResult> {
+        if (orderUuids.isEmpty()) return emptyList()
+        val mine = deviceId()
+
+        val rows = orderUuids.mapNotNull { dao.outboxRow(storeKey, it) }
+        // 只有 READY 能起飞；其余状态先挑出来，好给用户一句准确的交代
+        val ready = rows.filter { it.state == OrderOutboxEntity.READY }
+
+        for (fileId in ready.map { OutboxContribution.partsOf(ownerName, it).fileId }.distinct()) {
+            val outcome = runCatching { syncFile(storeKey, fileId) }.getOrElse {
+                audit("接管上传前同步抛异常 fileId=$fileId：${it.message}（继续上传，竞态窗口会变大）")
+                null
+            }
+            if (outcome != null &&
+                outcome !is OrderFileSyncEngine.Outcome.UpToDate &&
+                outcome !is OrderFileSyncEngine.Outcome.Applied &&
+                outcome !is OrderFileSyncEngine.Outcome.Rebuilt
+            ) {
+                audit("接管上传前同步没追平 fileId=$fileId：$outcome（继续上传，竞态窗口会变大）")
+            }
+        }
+
+        val out = ArrayList<UploadResult>(orderUuids.size)
+        for (uuid in orderUuids) {
+            // ⚠ 同步之后**重读**：对方可能已经传上去了，本地那行已经被 promoteFromOutbox
+            // 翻成 PROMOTED。这时候再走 takeOff 只会拿到一个 Skipped，用户看不懂。
+            val fresh = dao.outboxRow(storeKey, uuid)
+            when {
+                fresh == null -> {
+                    audit("接管上传：$uuid 已不在 outbox 里")
+                    out += UploadResult.Skipped(uuid, "MISSING")
+                }
+                fresh.state == OrderOutboxEntity.PROMOTED -> {
+                    // 正是我们要防的那一幕：同步之后发现别人已经传了
+                    audit("接管上传：$uuid 同步后发现已经在服务器上了，跳过")
+                    out += UploadResult.Skipped(uuid, OrderOutboxEntity.PROMOTED)
+                }
+                fresh.state != OrderOutboxEntity.READY -> {
+                    audit("接管上传：$uuid 处于 ${fresh.state}，只有 READY 能起飞")
+                    out += UploadResult.Skipped(uuid, fresh.state)
+                }
+                // 外部单在这里是允许上传的 —— 用户一笔一笔勾出来的，那就是"接管"的明确意图。
+                // 闸门只加在 uploadReady（自动批量）上。
+                //
+                // ⚠ 必须走 uploadOne 而不是直接 send：uploadOne 里的 takeOff 是 write-ahead，
+                // 先把行置 IN_FLIGHT 并落盘**再**发请求。跳过它的话，请求发出去之后进程被杀，
+                // 重启后这一行还是 READY → 再发一次 → 服务端不查重 → 同 uuid 两行。
+                else -> {
+                    if (fresh.originDevice.isNotEmpty() && fresh.originDevice != mine) {
+                        audit("接管上传：$uuid 原本是设备 ${fresh.originDevice.take(8)} 开的")
+                    }
+                    out += uploadOne(storeKey, ownerName, uuid)
+                }
+            }
+        }
+        return out
+    }
+
     // ==================== 崩溃恢复 ====================
 
     /**

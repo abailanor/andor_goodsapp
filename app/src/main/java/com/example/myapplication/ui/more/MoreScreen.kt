@@ -1,6 +1,7 @@
 package com.example.myapplication.ui.more
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,13 +14,19 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.data.HotspotSyncService
 import com.example.myapplication.data.SessionRepository.SessionState
 import kotlinx.coroutines.flow.StateFlow
 
@@ -40,6 +47,7 @@ import kotlinx.coroutines.flow.StateFlow
 @Composable
 fun MoreScreen(
     state: StateFlow<SessionState>,
+    hotspot: HotspotSyncService,
     onLogin: () -> Unit,
     onSettings: () -> Unit,
     onPendingOrders: () -> Unit,
@@ -49,6 +57,14 @@ fun MoreScreen(
 ) {
     val session by state.collectAsState()
     val online = session as? SessionState.Online
+
+    // 热点同步的状态。⚠ 必须能看见：传输是后台跑的，
+    // 而"没反应"与"正在传"与"传失败了"对用户来说是三件完全不同的事。
+    var hotspotStatus by remember { mutableStateOf("") }
+    DisposableEffect(hotspot) {
+        hotspot.onStatus { hotspotStatus = it }
+        onDispose { }
+    }
 
     Column(
         Modifier
@@ -97,6 +113,37 @@ fun MoreScreen(
         // 是两套平行存储。P8 的数据迁移向导做完之后这一行要摘掉 ——
         // 在那之前不能删，否则用户过去的订单在界面上就再也打不开了。
         Entry("旧历史订单（本机文件）") { onLegacyHistory() }
+
+        Spacer(Modifier.height(16.dp))
+        SectionTitle("离线互同步（两台设备直接交换未上传的订单与改价）")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    "没网的时候，两台设备连同一个热点就能互相补齐。" +
+                        "对方开的单会出现在「订单」页的“来自其他设备”里，" +
+                        "**不会自动上传** —— 只有那台设备确定不会再开机了，才手动勾选接管。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // 开热点的那台点这个
+                    OutlinedButton(onClick = {
+                        if (hotspot.isHosting) hotspot.stopHosting() else hotspot.startHosting()
+                    }, modifier = Modifier.weight(1f)) {
+                        Text(if (hotspot.isHosting) "停止等待" else "开热点：等待连接")
+                    }
+                    // 连热点的那台点这个
+                    OutlinedButton(onClick = { hotspot.startJoining() }, modifier = Modifier.weight(1f)) {
+                        Text("连热点：开始同步")
+                    }
+                }
+                if (hotspotStatus.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(hotspotStatus, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
 
         Spacer(Modifier.height(16.dp))
         SectionTitle("工具")

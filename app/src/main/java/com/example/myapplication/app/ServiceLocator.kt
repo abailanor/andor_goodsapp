@@ -7,6 +7,8 @@ import com.example.myapplication.core.money.Money
 import com.example.myapplication.core.time.AndroidMonotonicClock
 import com.example.myapplication.data.AdoptionTx
 import com.example.myapplication.data.AppDatabase
+import com.example.myapplication.data.HotspotMerger
+import com.example.myapplication.data.HotspotSyncService
 import com.example.myapplication.data.OrderRepository
 import com.example.myapplication.data.PriceDrift
 import com.example.myapplication.data.ProductRepository
@@ -565,6 +567,33 @@ class ServiceLocator(context: Context) {
                 // 批量查一次：一张单几十行，逐条查就是几十次数据库往返
                 products.getProductsByBarcodes(barcodes).associate { it.barcode to Money.toCents(it.price.toPlainString()) }
             },
+        )
+    }
+
+    // ==================== 热点互同步 ====================
+
+    /**
+     * 离线时两台设备直接互相同步未上传的订单与待推送的改价。
+     *
+     * 与 `DataShareService`（整库拷贝，只用于商品目录首次铺货）**不是一回事**：
+     * 整库覆盖对 outbox 是丢数据，这里走行级双向合并。
+     */
+    val hotspotMerger: HotspotMerger by lazy {
+        HotspotMerger(
+            outbox = outboxStore,
+            productDao = productDao,
+            ownerName = ::currentOwnerName,
+            audit = audit("HOTSPOT"),
+        )
+    }
+
+    val hotspotSync: HotspotSyncService by lazy {
+        HotspotSyncService(
+            context = appContext,
+            merger = hotspotMerger,
+            deviceId = { deviceId },
+            storeKey = ::currentStoreKey,
+            audit = audit("HOTSPOT"),
         )
     }
 

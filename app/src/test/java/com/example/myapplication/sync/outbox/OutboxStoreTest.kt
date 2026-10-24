@@ -561,6 +561,165 @@ class OutboxStoreTest {
         assertTrue(dao.ops.isEmpty())
     }
 
+    // ==================== adoptForeign：接收别的设备的单 ====================
+
+    /** 造一笔"别的设备热点同步过来的"未上传订单。 */
+    private fun foreignRow(
+        uuid: String,
+        state: String = OrderOutboxEntity.READY,
+        payload: ByteArray = foreignPayload(uuid),
+        originDevice: String = "device-theirs",
+        totalCents: Long = 3000L,
+        itemCount: Int = 3,
+        groupId: String = "",
+    ) = OrderOutboxEntity(
+        storeKey = storeKey, orderUuid = uuid, groupId = groupId,
+        fileType = OrderFileId.TYPE_B, year = 2026, month = 9,
+        payload = payload, state = state,
+        blockedReason = null, blockedBarcodes = null,
+        attemptCount = 0, lastError = null,
+        pricedAt = clock, createdAt = clock,
+        writer = "bob", totalCents = totalCents, itemCount = itemCount, orderTs = sept15,
+        originDevice = originDevice,
+    )
+
+    /**
+     * 独立拼一个 payload，**不用** `StableOrderJson`：
+     * 接收侧不该假设对方用的是同一个序列化器版本。
+     * writer=bob、ts=sept15、3 件、30.00 —— 与 dimKey 对得上。
+     */
+    private fun foreignPayload(uuid: String, total: String = "30.00", qty: Int = 3): ByteArray =
+        ("{\"order_uuid\":\"$uuid\",\"writer\":\"bob\",\"content\":{\"items\":" +
+            "[{\"barcode\":\"6901234567890\",\"name\":\"x\",\"quantity\":$qty,\"amount\":\"$total\"," +
+            "\"unitPrice\":\"10.00\"}],\"total\":\"$total\",\"ts\":$sept15},\"status\":1}")
+            .toByteArray(Charsets.UTF_8)
+
+    private val foreignUuid = "99999999-8888-7777-6666-555555555555"
+
+    @Test
+    fun `adoptForeign_插入外来行并把钱加进_OUTBOX_桶`() {
+        val r = runBlocking { store.adoptForeign(storeKey, "alice", listOf(foreignRow(foreignUuid))) }
+
+        assertEquals(1, r.inserted)
+        assertEquals(0, r.skipped)
+        assertEquals(OrderOutboxEntity.READY, dao.outboxState(storeKey, foreignUuid))
+        // ⚠ 这条是关键：插一行未上传的订单同时意味着这个店的营业额多了一笔。
+        // 不加的话统计少一笔，而之后提升时 promoteFromOutbox 会从桶里**减**走一笔
+        // 从来没加进去的钱 → 桶变成负数 → 营业额永久偏小，且 statsSelfCheck 查不出来。
+        assertEquals(3000L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(1L, outboxTotal(StatsProjection.METRIC_ORDERS))
+        assertEquals(3L, outboxTotal(StatsProjection.METRIC_PIECES))
+        // dimKey 用的是**对方 payload 里的** writer（bob），不是本机登录名
+        assertEquals(
+            3000L,
+            dao.contribValue(storeKey, StatsProjection.OUTBOX_SCOPE, "2026-09-15|w:bob", StatsProjection.METRIC_AMOUNT),
+        )
+    }
+
+    @Test
+    fun `adoptForeign_保留创建者的_originDevice_不盖成本机`() {
+        runBlocking { store.adoptForeign(storeKey, "alice", listOf(foreignRow(foreignUuid))) }
+
+        // 盖成本机 id 的话，下一次热点同步就分不清谁该自动上传它了 ——
+        // 两台设备都会以为是自己的单，都自动传，服务端不查重 → 两行。
+        assertEquals("device-theirs", dao.outbox[storeKey to foreignUuid]!!.originDevice)
+    }
+
+    @Test
+    fun `同一批数据同步两次_第二次全部跳过且贡献不翻倍`() {
+        val row = foreignRow(foreignUuid)
+        runBlocking { store.adoptForeign(storeKey, "alice", listOf(row)) }
+        assertEquals(3000L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+
+        // 用户连了两回热点是正常情况，不是错误
+        val second = runBlocking { store.adoptForeign(storeKey, "alice", listOf(row)) }
+
+        assertEquals(0, second.inserted)
+        assertEquals(1, second.skipped)
+        assertTrue(second.payloadConflicts.isEmpty())
+        assertEquals("贡献不能翻倍", 3000L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(1L, outboxTotal(StatsProjection.METRIC_ORDERS))
+    }
+
+    @Test
+    fun `同_uuid_但_payload_不同时保留本地那份并报冲突`() {
+        val local = enqueue(req(lines = listOf(line(amount = "52.00")))).rows.single()
+        // 对方声称有同一个 uuid，但字节不一样 —— 说明有一边被改过
+        val incoming = foreignRow(local.orderUuid, payload = foreignPayload(local.orderUuid, total = "99.00"))
+        val localBytes = local.payload.copyOf()
+
+        val r = runBlocking { store.adoptForeign(storeKey, "alice", listOf(incoming)) }
+
+        assertEquals(listOf(local.orderUuid), r.payloadConflicts)
+        assertEquals(0, r.inserted)
+        assertEquals(1, r.skipped)
+        // ⚠ 保留本地那份：它可能已经发出去过了。用对方的字节覆盖会让
+        // "发出去的字节与库里存的字节不一致"，所有偏移作废，且没有任何机制会报错。
+        assertTrue(localBytes.contentEquals(dao.outbox[storeKey to local.orderUuid]!!.payload))
+        assertTrue(audits.any { "payload 不一致" in it })
+    }
+
+    @Test
+    fun `PROMOTED_行被跳过_即使发送侧漏了过滤`() {
+        // 提升状态只能由同步路径写（applyAdded → promoteFromOutbox），
+        // 那条路径会同时把偏移、索引行、统计桶三件事一起做对。
+        val r = runBlocking {
+            store.adoptForeign(storeKey, "alice", listOf(foreignRow(foreignUuid, state = OrderOutboxEntity.PROMOTED)))
+        }
+
+        assertEquals(0, r.inserted)
+        assertEquals(1, r.skipped)
+        assertNull(dao.outbox[storeKey to foreignUuid])
+        assertEquals(0L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+    }
+
+    @Test
+    fun `外来行之后被提升时_桶净值归零`() {
+        runBlocking { store.adoptForeign(storeKey, "alice", listOf(foreignRow(foreignUuid))) }
+        assertEquals(3000L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+
+        // 模拟同步路径：对方上传了，本机同步到 ADD 消息 → promoteFromOutbox
+        runBlocking {
+            store.takeOff(storeKey, foreignUuid)
+            assertEquals(1, dao.markOutboxPromoted(storeKey, foreignUuid))
+            // promoteFromOutbox 减的就是 OutboxContribution.of 算出来的那一份
+            val row = dao.outbox[storeKey to foreignUuid]!!
+            for (c in OutboxContribution.of(row, OutboxContribution.partsOf("alice", row), utc)) {
+                dao.applyContribDelta(storeKey, StatsProjection.OUTBOX_SCOPE, c.dimKey, c.metric, -c.value)
+            }
+        }
+
+        // 加与减必须走同一个纯函数，否则差一分钱不会报错，只会让营业额永久偏掉
+        assertEquals(0L, outboxTotal(StatsProjection.METRIC_AMOUNT))
+        assertEquals(0L, outboxTotal(StatsProjection.METRIC_ORDERS))
+        assertEquals(0L, outboxTotal(StatsProjection.METRIC_PIECES))
+    }
+
+    @Test
+    fun `exportForPeer_排除_PROMOTED_与_DRAFT`() {
+        val ready = enqueue().rows.single().orderUuid
+        val blocked = enqueue(req(lines = listOf(line(barcode = "6909999999999"))), missing = listOf(colaMissing))
+            .rows.single().orderUuid
+        val promoted = enqueue(req(lines = listOf(line(barcode = "6908888888888")))).rows.single().orderUuid
+        runBlocking {
+            store.takeOff(storeKey, promoted)
+            dao.markOutboxPromoted(storeKey, promoted)
+            // DRAFT 只能手搓：enqueue 只会写 READY 或 BLOCKED
+            dao.insertOutbox(
+                dao.outbox[storeKey to ready]!!.copy(orderUuid = draftUuid, state = OrderOutboxEntity.DRAFT)
+            )
+        }
+
+        val out = runBlocking { store.exportForPeer(storeKey) }
+
+        // PROMOTED 不传：状态只能由同步路径写。
+        // DRAFT 不传：草稿连"成交了吗"都没确定，传过去会让对方算进营业额。
+        assertEquals(setOf(ready, blocked), out.map { it.orderUuid }.toSet())
+    }
+
+    private val colaMissing = "6901234567890"
+    private val draftUuid = "88888888-7777-6666-5555-444444444444"
+
     // ==================== splitCsv ====================
 
     @Test

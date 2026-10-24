@@ -142,26 +142,11 @@ class OrderRepository(
      *
      * @return 每笔的结果，UI 据此汇总"N 笔成功、M 笔待重试"。
      */
-    suspend fun uploadSelected(orderUuids: List<String>): List<OutboxUploader.UploadResult> {
-        val key = storeKey()
-        val owner = ownerName()
-        val out = ArrayList<OutboxUploader.UploadResult>(orderUuids.size)
-        for (uuid in orderUuids) {
-            val row = dao.outboxRow(key, uuid)
-            if (row == null) {
-                audit("上传跳过：$uuid 不在 outbox 里")
-                continue
-            }
-            if (row.state != OrderOutboxEntity.READY) {
-                // BLOCKED / IN_FLIGHT / FAILED_PERMANENT / DRAFT 都不该被"上传"按钮发出去。
-                // 跳过而不是报错：用户勾了一批，其中一笔状态刚好变了是正常并发。
-                audit("上传跳过：$uuid 处于 ${row.state}，只有 READY 能起飞")
-                continue
-            }
-            out += uploader.uploadOne(key, owner, uuid)
-        }
-        return out
-    }
+    suspend fun uploadSelected(orderUuids: List<String>): List<OutboxUploader.UploadResult> =
+        // 状态筛选与"上传前先同步"都在 uploader 里做（见 OutboxUploader.uploadSelected）。
+        // ⚠ 这里**不要**再自己过滤一遍状态：那样会漏掉同步之后状态刚变的那些行，
+        // 而"同步之后重读"正是防跨设备重复上传的关键一步。
+        uploader.uploadSelected(storeKey(), ownerName(), orderUuids)
 
     /**
      * 删掉一笔未上传的订单（连同它同组的其它未上传块 —— 见 [OutboxStore.discard]）。
