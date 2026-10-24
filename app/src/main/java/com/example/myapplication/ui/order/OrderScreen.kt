@@ -33,6 +33,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import com.example.myapplication.core.money.Money
+import com.example.myapplication.data.CartLine
 import com.example.myapplication.data.CartPricing
 import com.example.myapplication.data.OrderItem
 import com.example.myapplication.data.Product
@@ -74,11 +75,14 @@ fun OrderScreen(
         ?: remember { mutableStateOf(emptyList<OutputItem>()) }
     var showAIPresetDialog by remember { mutableStateOf(false) }
 
-    val totalPrice = remember(orderItems) {
-        orderItems.fold(BigDecimal.ZERO) { acc, item ->
-            acc.add(item.subtotal)
-        }
-    }
+    // ⚠ 用 ViewModel 的 totalPrice，不要在界面里自己 `Σ(price × quantity)`：
+    // 整箱价 ≠ 箱规 × 单价，那样算 30 个会得到 105.00 而实收 101.00 ——
+    // 总计、实收框、行内金额、结算框、小票必须是同一个来源，
+    // 否则顾客当场就会发现对不上。
+    val totalPrice = remember(orderItems) { viewModel.totalPrice }
+    val totalCents = remember(orderItems) { viewModel.totalCents }
+    /** 两个框都空的行是编辑中间态，不参与金额与件数。 */
+    val validLines = remember(orderItems) { orderItems.filterNot { it.isEmpty } }
 
     var barcodeInput by remember { mutableStateOf("") }
 
@@ -210,7 +214,13 @@ fun OrderScreen(
                                 // 新订单已经在「上传」时进了 order_outbox → order_index。
                                 // 两边都写的后果是同一笔单在旧历史页和新订单页各出现一次，
                                 // 而用户会以为开了两单。旧历史页从此只显示迁移前的老数据。
-                                val receipt = PrintUtil.generateReceipt(orderItems, totalPrice)
+                                // ⚠ PrintUtil 还只认旧的 `OrderItem(product, quantity)`，
+                                // 所以这里把箱/个折回总个数。P12 改打印模板时要换成
+                                // 直接吃 CartLine —— 那时才能印出单价/折扣/抹零三行。
+                                val legacy = validLines.mapNotNull { l ->
+                                    l.quantity?.let { OrderItem(product = l.product, quantity = it) }
+                                }
+                                val receipt = PrintUtil.generateReceipt(legacy, totalPrice)
                                 PrintService.printReceipt(context, receipt)
                             },
                             enabled = orderItems.isNotEmpty(),
@@ -418,17 +428,13 @@ fun OrderScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(orderItems) { item ->
+                    items(orderItems, key = { it.product.barcode }) { item ->
                         OrderItemCard(
-                            orderItem = item,
-                            onQuantityChange = { newQuantity ->
-                                viewModel.updateQuantity(item.product.barcode, newQuantity)
-                            },
-                            onRemove = {
-                                viewModel.removeItem(item.product.barcode)
-                            },
-                            viewModel=viewModel,
-                            mode = mode
+                            line = item,
+                            onBoxesChange = { viewModel.updateBoxes(item.product.barcode, it) },
+                            onSinglesChange = { viewModel.updateSingles(item.product.barcode, it) },
+                            onRemove = { viewModel.removeItem(item.product.barcode) },
+                            mode = mode,
                         )
                     }
                 }
@@ -712,11 +718,13 @@ fun SearchResultItem(
 }
 @Composable
 fun OrderItemCard(
-    orderItem: OrderItem,
-    onQuantityChange: (Int) -> Unit,
+    line: CartLine,
+    /** 改「件」（整箱数）。 */
+    onBoxesChange: (Int) -> Unit,
+    /** 改「个」（散卖数）。 */
+    onSinglesChange: (Int) -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: OrderViewModel,
     /** 进货模式下这一行**不显示任何金额**，见下面的注释。 */
     mode: OrderMode = OrderMode.SALE,
 ) {
@@ -773,7 +781,7 @@ fun OrderItemCard(
             }
             // 商品名
             Text(
-                text = orderItem.product.name,
+                text = line.product.name,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier
                     .weight(1f)
@@ -782,12 +790,13 @@ fun OrderItemCard(
                 overflow = TextOverflow.Ellipsis
             )
 
-            // 使用紧凑输入框
-            CompactQuantityInput(
-                quantity = orderItem.quantity,
-                onQuantityChange = onQuantityChange,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            )
+            // 「件」+「个」两个框。
+            // ⚠ 不按整箱卖的商品（boxPrice == null）**不显示「件」框** ——
+            // 摆一个填了也没用的框，用户会以为整箱价生效了，而实际按散卖算。
+            if (line.product.boxPrice != null) {
+                CountField(value = line.boxes, label = "件", onChange = onBoxesChange)
+            }
+            CountField(value = line.singles, label = "个", onChange = onSinglesChange)
         }
         Row(
             modifier = Modifier
@@ -803,18 +812,15 @@ fun OrderItemCard(
                 // 按箱规自动做（数了 30 个就输 30），不需要用户手动切。
 
             // 计算过程。
-            // ⚠ 用 CartLine 的金额，**不是** `orderItem.subtotal`（= 单价 × 数量）：
-            // 整箱价 ≠ 箱规 × 单价，所以后者在有整箱参与时是错的 —— 30 个会显示
-            // 3.50 × 30 = 105.00，而实际收 1 箱(80) + 6 个(21) = 101.00。
-            // 行内显示的数与结算框、小票必须是同一个，否则顾客当场就会发现对不上。
-            val line = remember(orderItem) {
-                CartPricing.fromTotalQuantity(orderItem.product, orderItem.quantity)
-            }
+            // ⚠ 用 CartLine 的金额，**不是** `单价 × 数量`：整箱价 ≠ 箱规 × 单价，
+            // 后者在有整箱参与时是错的 —— 30 个会显示 3.50 × 30 = 105.00，
+            // 而实际收 1 箱(80) + 6 个(21) = 101.00。行内显示的数与总计、实收框、
+            // 结算框、小票必须是同一个来源，否则顾客当场就会发现对不上。
             if (mode == OrderMode.PURCHASE) {
                 // 进货模式：不显示任何金额。本地目录里的 price 是**卖出价**，
                 // 摆在进货单上会被当成成本价看，而系统里根本没有买入价。
                 Text(
-                    text = "${orderItem.quantity} 件",
+                    text = "${line.quantity ?: 0} 件",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 6.dp),
@@ -822,15 +828,15 @@ fun OrderItemCard(
             } else {
                 Text(
                     text = buildString {
-                        append(Money.fromCents(line?.unitPriceCents ?: 0L)).append("/个")
-                        if ((line?.boxes ?: 0) > 0) {
-                            append(" · ").append(line!!.boxes).append("箱")
+                        append(Money.fromCents(line.unitPriceCents)).append("/个")
+                        if (line.boxes > 0) {
+                            append(" · ").append(line.boxes).append("件")
                             if (line.singles > 0) append(" + ").append(line.singles).append("个")
                             append(" = ")
                         } else {
-                            append(" × ").append(orderItem.quantity).append(" = ")
+                            append(" × ").append(line.singles).append(" = ")
                         }
-                        append(Money.fromCents(line?.amountCents ?: 0L))
+                        append(Money.fromCents(line.amountCents))
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -839,4 +845,40 @@ fun OrderItemCard(
             }
         }
     }
+}
+
+/**
+ * 「件」/「个」的紧凑数字输入框。
+ *
+ * ## ⚠ 显示的是**文本**，不是 `value.toString()`
+ *
+ * 直接用 `value.toString()` 的话，用户清空输入框的瞬间 `value` 变成 0，
+ * 框里立刻跳出一个 "0" —— 光标还在里面，但已经没法把它删掉了，
+ * 只能选中再覆盖。用本地文本状态就能真的清空。
+ *
+ * 空文本按 0 处理（"无输入就是默认 0"），所以 [onChange] 收到的一直是有效整数。
+ */
+@Composable
+private fun CountField(value: Int, label: String, onChange: (Int) -> Unit) {
+    var text by remember(value) { mutableStateOf(if (value == 0) "" else value.toString()) }
+
+    OutlinedTextField(
+        value = text,
+        onValueChange = { raw ->
+            // 只收数字，空文本按 0 处理（"无输入就是默认 0"）
+            val digits = raw.filter { it.isDigit() }
+            text = digits
+            onChange(digits.toIntOrNull() ?: 0)
+        },
+        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+        placeholder = { Text("0", style = MaterialTheme.typography.bodySmall) },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+        ),
+        textStyle = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .width(62.dp)
+            .padding(horizontal = 2.dp),
+    )
 }

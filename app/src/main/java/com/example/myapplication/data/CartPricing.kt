@@ -45,8 +45,14 @@ data class CartLine(
     init {
         require(boxes >= 0) { "箱数不能为负：$boxes" }
         require(singles >= 0) { "散卖个数不能为负：$singles" }
-        require(boxes > 0 || singles > 0) { "一行至少要有一个（箱或个）" }
+        // ⚠ 这里**故意不**要求"至少有一个"。两个框都清空是编辑过程中的正常中间态
+        // （用户先删掉 5 再输 30，中间必然经过 0），而 `copy` 会重跑 init ——
+        // 要求非空的话那次 copy 就抛异常，界面上的输入框会卡在旧值上不动。
+        // 空行由 [CartPricing.toOrderLines] 在出口处过滤掉，不会进 payload。
     }
+
+    /** 两个框都空 = 这一行没有内容。[CartPricing.toOrderLines] 会跳过它。 */
+    val isEmpty: Boolean get() = boxes == 0 && singles == 0
 
     /** 单个零售价（分）。 */
     val unitPriceCents: Long =
@@ -213,8 +219,8 @@ object CartPricing {
      * 这个是"只有一个总数、系统无从拆箱"→ 可以结算，但要提示。
      * 后者只有在购物车分别输箱数和个数时才可能变成前者。
      */
-    fun ambiguousBoxProducts(items: List<Pair<Product, Int>>): List<String> =
-        items.filter { (p, q) -> q > 0 && p.needsBoxSize }.map { it.first.barcode }.distinct()
+    fun ambiguousBoxProducts(lines: List<CartLine>): List<String> =
+        lines.filter { !it.isEmpty && it.product.needsBoxSize }.map { it.product.barcode }.distinct()
 
     /**
      * 缺箱规的条码：`boxes > 0 且 boxSize == 0`。
@@ -240,6 +246,10 @@ object CartPricing {
     fun toOrderLines(lines: List<CartLine>): List<OrderLine>? {
         val out = ArrayList<OrderLine>(lines.size)
         for (l in lines) {
+            // 两个框都空的行直接跳过：那是编辑过程中的中间态，不是"数量为 0 的商品"。
+            // ⚠ 绝不能让它变成一条 `quantity = 0` 的 OrderLine ——
+            // 服务端 extractItems 要求 quantity 是**正整数**，0 会让整张 B 类单拿 400。
+            if (l.isEmpty) continue
             val qty = l.quantity ?: return null
             out += OrderLine(
                 barcode = l.product.barcode,

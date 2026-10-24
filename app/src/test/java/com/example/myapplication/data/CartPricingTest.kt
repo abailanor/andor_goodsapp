@@ -323,11 +323,47 @@ class CartPricingTest {
         val noBox = product(barcode = "6900000000003", boxPrice = null, boxSize = 0)
 
         val out = CartPricing.ambiguousBoxProducts(
-            listOf(bad to 30, ok to 30, noBox to 5, bad to 10)
+            listOf(
+                CartLine(bad, singles = 30),
+                CartLine(ok, singles = 30),
+                CartLine(noBox, singles = 5),
+                CartLine(bad, singles = 10),
+            )
         )
 
         // 去重，且不把"本来就不按整箱卖"的算进来
         assertEquals(listOf("6900000000001"), out)
+    }
+
+    @Test
+    fun `两个框都空的行是编辑中间态_不进_payload_也不算钱`() {
+        // 用户先删掉 5 再输 30，中间必然经过 0/0。CartLine 允许它存在，
+        // 但出口处必须过滤掉 —— 否则会变成一条 quantity=0 的 OrderLine，
+        // 而服务端 extractItems 要求正整数，整张 B 类单会拿 400。
+        val empty = CartLine(product(), boxes = 0, singles = 0)
+        val real = CartLine(product(barcode = "6900000000002"), boxes = 0, singles = 3)
+
+        assertTrue(empty.isEmpty)
+        assertEquals(0L, empty.amountCents)
+        assertEquals(0, empty.quantity)
+
+        val out = CartPricing.toOrderLines(listOf(empty, real))!!
+        assertEquals(1, out.size)
+        assertEquals("6900000000002", out.single().barcode)
+
+        // 金额也不该把空行算进去（它本来就是 0，但 totals 要能正常跑完）
+        assertEquals(1_050L, CartPricing.totals(listOf(empty, real)).amountSum)
+    }
+
+    @Test
+    fun `ambiguousBoxProducts_忽略空行`() {
+        val bad = product(barcode = "6900000000001", boxPrice = "80.00", boxSize = 0)
+
+        assertTrue(CartPricing.ambiguousBoxProducts(listOf(CartLine(bad))).isEmpty())
+        assertEquals(
+            listOf("6900000000001"),
+            CartPricing.ambiguousBoxProducts(listOf(CartLine(bad, singles = 3))),
+        )
     }
 
     @Test
@@ -352,16 +388,6 @@ class CartPricingTest {
             } catch (e: IllegalArgumentException) {
                 assertTrue(e.message!!.contains("不能为负"))
             }
-        }
-    }
-
-    @Test
-    fun `一行至少要有一个`() {
-        try {
-            CartLine(product(), boxes = 0, singles = 0)
-            fail("空行应当被拒")
-        } catch (e: IllegalArgumentException) {
-            assertTrue(e.message!!.contains("至少要有一个"))
         }
     }
 

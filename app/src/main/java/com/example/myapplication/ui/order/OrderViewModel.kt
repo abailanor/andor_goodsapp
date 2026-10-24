@@ -56,12 +56,12 @@ class OrderViewModel(
     private val _mode = MutableStateFlow(CurrentOrderMode.now)
     val mode: StateFlow<OrderMode> = _mode.asStateFlow()
 
-    private val _saleItems = MutableStateFlow<List<OrderItem>>(emptyList())
-    private val _purchaseItems = MutableStateFlow<List<OrderItem>>(emptyList())
+    private val _saleItems = MutableStateFlow<List<CartLine>>(emptyList())
+    private val _purchaseItems = MutableStateFlow<List<CartLine>>(emptyList())
 
     /** 当前模式那辆车。UI 只观察这一个。 */
-    private val _orderItems = MutableStateFlow<List<OrderItem>>(emptyList())
-    val orderItems: StateFlow<List<OrderItem>> = _orderItems.asStateFlow()
+    private val _orderItems = MutableStateFlow<List<CartLine>>(emptyList())
+    val orderItems: StateFlow<List<CartLine>> = _orderItems.asStateFlow()
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
@@ -70,8 +70,20 @@ class OrderViewModel(
     private val _checkout = MutableStateFlow<CheckoutStep>(CheckoutStep.Idle)
     val checkout: StateFlow<CheckoutStep> = _checkout.asStateFlow()
 
+    /**
+     * 应收总额（**行金额之和**，不含手工抹零），BigDecimal 只为兼容打印那边的旧签名。
+     *
+     * ⚠ 必须走 [CartPricing]，不能是 `Σ(price × quantity)`：
+     * 整箱价 ≠ 箱规 × 单价，后者在有整箱参与时是错的 —— 30 个会算出 105.00
+     * 而实收 101.00。行内显示的数、总计、结算框、小票必须是同一个来源，
+     * 否则顾客当场就会发现对不上。
+     */
     val totalPrice: BigDecimal
-        get() = _orderItems.value.fold(BigDecimal.ZERO) { acc, item -> acc.add(item.subtotal) }
+        get() = BigDecimal.valueOf(CartPricing.totals(validLines()).amountSum).movePointLeft(2)
+
+    /** 与 [totalPrice] 同源的分单位版本。新代码用这个，别再转 BigDecimal。 */
+    val totalCents: Long
+        get() = CartPricing.totals(validLines()).amountSum
 
     // ==================== 手工总额（抹零）====================
 
@@ -161,16 +173,49 @@ class OrderViewModel(
         }
     }
 
-    /** 存的是条码 + 数量，`Product` 要现查（价格可能已经变了）。查不到的条目直接丢掉。 */
-    private suspend fun hydrate(saved: List<com.example.myapplication.data.SavedOrderItem>): List<OrderItem> {
-        val out = ArrayList<OrderItem>(saved.size)
+    /**
+     * 存的是条码 + 箱/个，`Product` 要现查（价格可能已经变了）。查不到的条目直接丢掉。
+     *
+     * 旧格式（只有 `quantity`）走 [CartPricing.fromTotalQuantity] 按箱规反推 ——
+     * 那是猜测，但比丢掉整行车好，而且用户一眼能看见箱/个两个框里的数对不对。
+     */
+    private suspend fun hydrate(saved: List<com.example.myapplication.data.SavedOrderItem>): List<CartLine> {
+        val out = ArrayList<CartLine>(saved.size)
         for (s in saved) {
-            val p = repository.getProductByBarcode(s.barcode)
-            if (p != null) out += OrderItem(product = p, quantity = s.quantity)
+            val p = repository.getProductByBarcode(s.barcode) ?: continue
             // 查不到就丢：商品被删了。留着的话结算时会拼出一条没有价格的行，
             // 而"少了一个条目"用户看得见，"多了一行 0.00"看不见。
+            val line = if (s.isLegacy) {
+                CartPricing.fromTotalQuantity(p, s.quantity)
+            } else {
+                runCatching { CartLine(p, boxes = s.boxes, singles = s.singles) }.getOrNull()
+            }
+            if (line != null) out += line
         }
         return out
+    }
+
+    /**
+     * 转成旧的 [OrderItem] 形状，只为跨过三个还没改造的边界：
+     * 打印（`PrintUtil.generateReceipt`）、待开单（`PendingOrderStorage`）、
+     * 历史（`OrderHistoryStorage`）。它们都只认 `product + quantity`。
+     *
+     * ⚠ 这一步**会丢掉箱/个拆分**（只剩总个数）。待开单是按用户决定继续用 JSON
+     * 文件存的，所以那里的箱/个信息本来就保不住；等 P12 改打印模板时，
+     * 打印那条路要换成直接吃 [CartLine]。
+     */
+    private fun toOrderItems(): List<OrderItem> = validLines().mapNotNull { l ->
+        l.quantity?.let { OrderItem(product = l.product, quantity = it) }
+    }
+
+    private companion object {
+        /**
+         * 扫码/搜索新增一个商品时的默认散卖数。沿用旧行为（原来是 5）。
+         *
+         * ⚠ 不能默认成 0：`CartLine` 允许两个框都空（那是编辑中间态），
+         * 但刚扫上来的商品如果显示成 0/0，用户会以为没扫上。
+         */
+        const val DEFAULT_ADD = 5
     }
 
     /**
@@ -188,10 +233,10 @@ class OrderViewModel(
     }
 
     /** 当前模式那辆车。所有增删改都必须走它，不能直接碰 `_orderItems`。 */
-    private fun currentCart(): MutableStateFlow<List<OrderItem>> =
+    private fun currentCart(): MutableStateFlow<List<CartLine>> =
         if (_mode.value == OrderMode.SALE) _saleItems else _purchaseItems
 
-    private fun setCart(items: List<OrderItem>) {
+    private fun setCart(items: List<CartLine>) {
         currentCart().value = items
         _orderItems.value = items
         // ⚠ 购物车一变就**清掉手工总额**，让它重新跟随计算值。
@@ -221,8 +266,12 @@ class OrderViewModel(
 
     // ==================== 待开单互转 ====================
 
+    /**
+     * 从待开单载入。待开单存的是 `product + quantity`（没有箱/个拆分），
+     * 所以这里按箱规反推 —— 载入之后用户能在两个框里看见并改正。
+     */
     fun loadPendingOrderItems(items: List<OrderItem>, sourceFileName: String, targetFileName: String? = null) {
-        setCart(items)
+        setCart(CartPricing.fromCart(items.map { it.product to it.quantity }))
         _sourcePendingFileName.value = sourceFileName
         _targetPendingFileName.value = targetFileName
         saveOrder()
@@ -281,7 +330,9 @@ class OrderViewModel(
                     _message.value = "已更新: ${product.name} (移至最前)"
                     soundPlayer?.playAlreadyInList()
                 } else {
-                    setCart(listOf(OrderItem(product = product, quantity = 5)) + _orderItems.value)
+                    // 默认 5 个散卖（沿用旧行为）。CartLine 要求至少有一个，
+                    // 所以不能加成 0/0 —— 那样这一行在界面上是空的，用户不知道扫上了没有。
+                    setCart(listOf(CartLine(product, boxes = 0, singles = DEFAULT_ADD)) + _orderItems.value)
                     _message.value = "已添加: ${product.name}"
                     soundPlayer?.playScanSuccess()
                 }
@@ -308,8 +359,8 @@ class OrderViewModel(
                         // ⚠ v4 迁移之后合并过的商品**已经没有** 0 前缀那一条了
                         // （BoxRowMerger 把它吸收进 boxPrice），所以这个分支现在只会命中
                         // 迁移时保留下来的孤儿整件行。新数据不该再走到这里。
-                        val qty = if (barcode[0] == '0') 1 else 5
-                        setCart(listOf(OrderItem(product = product, quantity = qty)) + _orderItems.value)
+                        val qty = if (barcode[0] == '0') 1 else DEFAULT_ADD
+                        setCart(listOf(CartLine(product, boxes = 0, singles = qty)) + _orderItems.value)
                         _message.value = "已添加: ${product.name}"
                         soundPlayer?.playScanSuccess()
                         saveOrder()
@@ -325,16 +376,31 @@ class OrderViewModel(
         }
     }
 
-    fun updateQuantity(barcode: String, newQuantity: Int) {
-        if (newQuantity <= 0) {
-            removeItem(barcode)
-            return
-        }
-        setCart(_orderItems.value.map { item ->
-            if (item.product.barcode == barcode) OrderItem(product = item.product, quantity = newQuantity) else item
-        })
+    /** 改「件」（整箱数）。 */
+    fun updateBoxes(barcode: String, boxes: Int) =
+        updateLine(barcode) { it.copy(boxes = boxes.coerceAtLeast(0)) }
+
+    /** 改「个」（散卖数）。 */
+    fun updateSingles(barcode: String, singles: Int) =
+        updateLine(barcode) { it.copy(singles = singles.coerceAtLeast(0)) }
+
+    /**
+     * 两个框都清空时**不删这一行**。
+     *
+     * 那是输入过程中的正常中间态（先删掉 5 再输 30，中间必然经过 0），
+     * 删行的话用户刚扫上来的商品会凭空消失，而他只是想在框里改个数字。
+     * 空行在 [CartPricing.toOrderLines] 出口处被过滤掉，不会进 payload ——
+     * ⚠ 绝不能让它变成一条 `quantity = 0` 的行，服务端要求正整数，0 会让整张 B 类单拿 400。
+     *
+     * 真正的删除走 [removeItem]。
+     */
+    private fun updateLine(barcode: String, transform: (CartLine) -> CartLine) {
+        setCart(_orderItems.value.map { if (it.product.barcode == barcode) transform(it) else it })
         saveOrder()
     }
+
+    /** 真正有效的行（至少有一个箱或个）。结算、金额、件数都只看这些。 */
+    private fun validLines(): List<CartLine> = _orderItems.value.filterNot { it.isEmpty }
 
     fun removeItem(barcode: String) {
         setCart(_orderItems.value.filter { it.product.barcode != barcode })
@@ -374,9 +440,8 @@ class OrderViewModel(
 
     // ==================== 结算 ====================
 
-    /** 把当前购物车转成 [CartLine]（按箱规把总数拆成箱 + 零散）。 */
-    private fun cartLines(): List<CartLine> =
-        CartPricing.fromCart(_orderItems.value.map { it.product to it.quantity })
+    /** 当前购物车里**有效**的行（空行已过滤）。 */
+    private fun cartLines(): List<CartLine> = validLines()
 
     /**
      * 点「结算」。
@@ -394,7 +459,6 @@ class OrderViewModel(
             _message.value = "订单里没有有效的行"
             return
         }
-        val pairs = _orderItems.value.map { it.product to it.quantity }
         val missing = CartPricing.missingBoxSize(lines)
         if (missing.isNotEmpty()) {
             _checkout.value = CheckoutStep.NeedBoxSize(lines.filter { it.needsBoxSize })
@@ -402,7 +466,7 @@ class OrderViewModel(
         }
         // 设了整箱价却没箱规的商品：这种在"只有总数"的录入方式下拆不了箱，
         // 会被按散卖计价 —— 整箱价被忽略、多收顾客的钱。不拦住结算，但必须说出来。
-        _checkout.value = CheckoutStep.Ready(lines, CartPricing.ambiguousBoxProducts(pairs))
+        _checkout.value = CheckoutStep.Ready(lines, CartPricing.ambiguousBoxProducts(lines))
     }
 
     fun dismissCheckout() {
@@ -527,7 +591,7 @@ class OrderViewModel(
         viewModelScope.launch {
             try {
                 val ctx = context ?: return@launch
-                OrderHistoryStorage(ctx).saveNewOrder(_orderItems.value, totalPrice.toPlainString())
+                OrderHistoryStorage(ctx).saveNewOrder(toOrderItems(), totalPrice.toPlainString())
             } catch (e: Exception) {
                 _message.value = "保存历史订单失败: ${e.message}"
             }
@@ -551,7 +615,7 @@ class OrderViewModel(
                     val f = java.io.File(ctx.filesDir, "PendingOrders/$name")
                     if (f.exists()) f.delete()
                 }
-                val savedFile = storage.savePendingOrder(_orderItems.value, total)
+                val savedFile = storage.savePendingOrder(toOrderItems(), total)
                 savedFileName = savedFile.record.fileName
                 _targetPendingFileName.value = savedFile.record.fileName
                 _sourcePendingFileName.value = _targetPendingFileName.value
@@ -565,7 +629,8 @@ class OrderViewModel(
         return savedFileName
     }
 
-    fun getOrderItemCount(): Int = _orderItems.value.size
+    /** 有效行数（两个框都空的中间态不算）。 */
+    fun getOrderItemCount(): Int = validLines().size
 
     fun getTargetPendingFileName(): String? = _targetPendingFileName.value
 }

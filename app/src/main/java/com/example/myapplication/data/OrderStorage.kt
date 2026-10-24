@@ -7,10 +7,35 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/**
+ * 购物车里一行的持久化形状。
+ *
+ * ## 为什么 boxes 与 singles 都要存，而不是只存总数
+ *
+ * 整箱价 ≠ 箱规 × 单价，所以"30 个"可以是 1 箱 + 6 个（101.00），
+ * 也可以是 30 个散卖（105.00）—— **同一个总数对应两个不同的金额**。
+ * 只存总数的话，恢复购物车时就得靠 `CartPricing.fromTotalQuantity` 按箱规反推，
+ * 而那是"对顾客有利"的猜测：店里其实没整箱可拆时会少收钱。
+ * 用户明确输了箱数就存箱数，不要替他猜。
+ *
+ * @param quantity 冗余字段，= boxes × 箱规 + singles。**只为读旧数据保留** ——
+ *        升级前存的车只有这一个字段。新写入时照旧填上，这样降级回旧版本也不会全丢。
+ */
 data class SavedOrderItem(
     val barcode: String,
-    val quantity: Int
-)
+    val quantity: Int = 0,
+    val boxes: Int = 0,
+    val singles: Int = 0,
+) {
+    /**
+     * 这一行是不是**旧格式**（只有总数、没有箱/个拆分）。
+     *
+     * ⚠ 判据必须三个条件一起看：`boxes == 0 && singles == 0 && quantity > 0`。
+     * 只看前两个的话，"新格式但两个框都没填"会被误判成旧数据 ——
+     * 不过那种行本来就不该被存下来（[CartLine] 的 init 要求至少有一个）。
+     */
+    val isLegacy: Boolean get() = boxes == 0 && singles == 0 && quantity > 0
+}
 data class OrderStorageData(
     val orderItems: List<SavedOrderItem>,
     val sourcePendingFileName: String? = null,
@@ -46,14 +71,20 @@ class OrderStorage(private val context: Context) {
 
     suspend fun saveOrderData(
         mode: String,
-        orderItems: List<OrderItem>,
+        orderItems: List<CartLine>,
         sourcePendingFileName: String? = null,
         targetPendingFileName: String? = null
     ) {
         withContext(Dispatchers.IO) {
             // 转换为可存储的格式
             val savedItems = orderItems.map {
-                SavedOrderItem(it.product.barcode, it.quantity)
+                SavedOrderItem(
+                    barcode = it.product.barcode,
+                    // quantity 是冗余的，但照旧填上：降级回旧版本时至少总数还在
+                    quantity = it.quantity ?: 0,
+                    boxes = it.boxes,
+                    singles = it.singles,
+                )
             }
 
             // 创建完整的数据对象
