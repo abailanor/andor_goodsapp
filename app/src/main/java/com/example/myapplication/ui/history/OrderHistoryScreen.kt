@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.data.CartLine
 import com.example.myapplication.data.OrderHistoryFile
 import com.example.myapplication.data.OrderHistoryRecord
 import com.example.myapplication.data.OrderHistoryStorage
@@ -347,18 +348,23 @@ fun OrderHistoryScreen(modifier: Modifier = Modifier) {
                     },
                     onPrint = {
                         try {
+                            // 旧历史订单存的是**当时**的单价，就用它 ——
+                            // ⚠ 绝不能拿当前目录价重算：那会让一张历史小票的金额
+                            // 随着后来越改越不对，而顾客手里那张纸是不变的。
                             val receipt = PrintUtil.generateReceipt(
-                                order.record.items.map { item ->
-                                    OrderItem(
+                                lines = order.record.items.map { item ->
+                                    CartLine(
                                         product = Product(
                                             name = item.name,
                                             barcode = item.barcode,
-                                            price = item.price.toBigDecimalOrNull() ?: BigDecimal.ZERO
+                                            price = item.price.toBigDecimalOrNull() ?: BigDecimal.ZERO,
                                         ),
-                                        quantity = item.quantity
+                                        boxes = 0,
+                                        singles = item.quantity,
                                     )
                                 },
-                                order.record.totalPrice.toBigDecimalOrNull() ?: BigDecimal.ZERO
+                                manualTotalCents = order.record.totalPrice.toBigDecimalOrNull()
+                                    ?.let { com.example.myapplication.core.money.Money.toCents(it.toPlainString()) },
                             )
                             PrintService.printReceipt(context, receipt)
                             message = "正在打印..."

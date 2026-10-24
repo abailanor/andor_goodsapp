@@ -212,7 +212,14 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                     // 不转发的话底色变了、车没换，用户看到的还是销售单的内容。
                     ModeSwitchBar(onModeChanged = { viewModel.setMode(it) })
                     Box(Modifier.weight(1f)) {
-                        OrderScreen(viewModel = viewModel, aiViewModel = sharedAIViewModel)
+                        val s by locator.settings.settings.collectAsState()
+                        OrderScreen(
+                            viewModel = viewModel,
+                            aiViewModel = sharedAIViewModel,
+                            printShopName = s.printShopName,
+                            printShopPhone = s.printShopPhone,
+                            printShopAddress = s.printShopAddress,
+                        )
                     }
                 }
             }

@@ -54,7 +54,16 @@ import com.example.myapplication.ui.ai.OutputItem
 fun OrderScreen(
     viewModel: OrderViewModel,
     modifier: Modifier = Modifier,
-    aiViewModel: AIViewModel? = null // 可选的 AI ViewModel
+    aiViewModel: AIViewModel? = null, // 可选的 AI ViewModel
+    /**
+     * 小票抬头。来自 `AppSettings.printShopName/Phone/Address`。
+     *
+     * ⚠ 原来是硬编码在 PrintUtil 里的（`电话：15288180414`、`地址：官渡区新广丰B区14-16`）——
+     * 那是某一家店的信息，装在别的店手机上就会印出别人家的电话。
+     */
+    printShopName: String = "",
+    printShopPhone: String = "",
+    printShopAddress: String = "",
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -214,13 +223,16 @@ fun OrderScreen(
                                 // 新订单已经在「上传」时进了 order_outbox → order_index。
                                 // 两边都写的后果是同一笔单在旧历史页和新订单页各出现一次，
                                 // 而用户会以为开了两单。旧历史页从此只显示迁移前的老数据。
-                                // ⚠ PrintUtil 还只认旧的 `OrderItem(product, quantity)`，
-                                // 所以这里把箱/个折回总个数。P12 改打印模板时要换成
-                                // 直接吃 CartLine —— 那时才能印出单价/折扣/抹零三行。
-                                val legacy = validLines.mapNotNull { l ->
-                                    l.quantity?.let { OrderItem(product = l.product, quantity = it) }
-                                }
-                                val receipt = PrintUtil.generateReceipt(legacy, totalPrice)
+                                val receipt = PrintUtil.generateReceipt(
+                                    lines = validLines,
+                                    manualTotalCents = viewModel.manualTotalCents,
+                                    // 进货单不印任何金额：系统里没有买入价，
+                                    // 本地目录的 price 是卖出价，印出来会被当成成本记账。
+                                    purchase = mode == OrderMode.PURCHASE,
+                                    shopName = printShopName,
+                                    shopPhone = printShopPhone,
+                                    shopAddress = printShopAddress,
+                                )
                                 PrintService.printReceipt(context, receipt)
                             },
                             enabled = orderItems.isNotEmpty(),
