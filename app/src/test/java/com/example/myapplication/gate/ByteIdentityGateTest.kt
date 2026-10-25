@@ -609,7 +609,14 @@ class ByteIdentityGateTest {
     /** 按 `uuidOffset` 在磁盘字节里定位所在行并解析。行边界按 LF 找，不用任何生产扫描器。 */
     private fun lineAt(disk: ByteArray, uuidOffset: Long): JsonObject {
         var s = uuidOffset.toInt()
-        while (s > 0 && disk[s - 1] != ByteOps.LF) s--
+        // ⚠ 下界是 HEADER_LEN（4），**不是 0**：文件第一行的前面没有 LF，退到 0 会把
+        // 4 字节二进制版本头圈进文本。Gson 把 NUL 当空白跳过，于是不报 malformed，
+        // 而是报一句完全指不到真因的 "Expected JsonObject but was JsonPrimitive" ——
+        // 实测（2026-10-25，JDK23 + Gson 2.10.1）与这个坑一模一样，曾把方向二
+        // 坑成"测试莫名其妙失败、生产代码却没问题"。
+        // 顺带：版本头第 4 字节可能是 0x0A（版本号 10），所以判据用 s > HEADER_LEN
+        // 而不是 disk[HEADER_LEN - 1] != LF。
+        while (s > ByteOps.HEADER_LEN && disk[s - 1] != ByteOps.LF) s--
         var e = uuidOffset.toInt()
         while (e < disk.size && disk[e] != ByteOps.LF) e++
         return gson.fromJson(String(disk, s, e - s, UTF_8), JsonObject::class.java)

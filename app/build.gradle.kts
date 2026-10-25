@@ -45,6 +45,18 @@ android {
     sourceSets {
         getByName("androidTest").assets.srcDir("$projectDir/schemas")
     }
+
+    testOptions {
+        unitTests.all {
+            // 把命令行的 `-Ds1.base=...` / `-Ds1.data=...` 透传给测试 JVM。
+            // ByteIdentityGateTest（方案 §7.2 硬验收门）靠它们指向真服务端，
+            // 而 Gradle 默认**不**把 -D 传给 test JVM —— 少了这段，那道门只能在
+            // IDE 的 Run Configuration 里填参，命令行与 CI 都驱动不了。
+            System.getProperties()
+                .filterKeys { it.toString().startsWith("s1.") }
+                .forEach { (k, v) -> it.systemProperty(k.toString(), v) }
+        }
+    }
 }
 
 // Room 把每个版本的 schema 导出成 JSON 到 app/schemas/，**这个目录要进 git**。
