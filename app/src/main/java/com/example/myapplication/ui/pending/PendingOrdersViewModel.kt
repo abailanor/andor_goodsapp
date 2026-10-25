@@ -10,6 +10,7 @@ import com.example.myapplication.data.PendingOrderLoader
 import com.example.myapplication.data.PendingOrderRecord
 import com.example.myapplication.data.PendingOrderStorage
 import com.example.myapplication.data.ProductRepository
+import com.example.myapplication.data.restorePendingOrderItems
 import com.example.myapplication.ui.CurrentOrderMode
 import com.example.myapplication.ui.orderModeOf
 import kotlinx.coroutines.flow.Flow
@@ -103,13 +104,7 @@ class PendingOrdersViewModel(
     fun previewOrder(pendingOrderFile: PendingOrderFile) {
         viewModelScope.launch {
             try {
-                val orderItems = mutableListOf<OrderItem>()
-                for (line in pendingOrderFile.record.items) {
-                    val product = repository.getProductByBarcode(line.barcode)
-                    if (product != null) {
-                        orderItems.add(OrderItem(product = product, quantity = line.quantity))
-                    }
-                }
+                val (orderItems, _) = toOrderItems(pendingOrderFile.record)
                 _selectedOrder.value = PendingOrderItem(
                     file = pendingOrderFile.file,
                     record = pendingOrderFile.record,
@@ -120,6 +115,19 @@ class PendingOrdersViewModel(
             }
         }
     }
+
+    /**
+     * 把待开单的行还原成购物车行。逻辑在 [restorePendingOrderItems]（纯函数，可单测）。
+     *
+     * ⚠ 商品库查不到**不能丢行**：进货单的商品来自管理员目录，本地库里本来就可能
+     * 没有。逐行查库、查不到就跳过的写法会让进货单点「开单」后购物车是空的。
+     *
+     * @return (购物车行, 其中按快照恢复的行数)
+     */
+    private suspend fun toOrderItems(record: PendingOrderRecord): Pair<List<OrderItem>, Int> =
+        restorePendingOrderItems(record) { barcode ->
+            repository.getProductByBarcode(barcode)
+        }
 
     /**
      * 关闭预览
@@ -135,12 +143,11 @@ class PendingOrdersViewModel(
     fun openOrder(pendingOrderFile: PendingOrderFile) {
         viewModelScope.launch {
             try {
-                val orderItems = mutableListOf<OrderItem>()
-                for (line in pendingOrderFile.record.items) {
-                    val product = repository.getProductByBarcode(line.barcode)
-                    if (product != null) {
-                        orderItems.add(OrderItem(product = product, quantity = line.quantity))
-                    }
+                val (orderItems, fromSnapshot) = toOrderItems(pendingOrderFile.record)
+                if (fromSnapshot > 0) {
+                    // 进货单常见：商品不在本地库。告知用户是按保存时的快照载入的，
+                    // 免得他以为"开单页自动变出了我没录过的商品"。
+                    _message.value = "有 $fromSnapshot 项商品不在本地商品库，已按保存时的快照载入"
                 }
 
                 // 设置新订单数据
@@ -149,8 +156,6 @@ class PendingOrdersViewModel(
                 PendingOrderLoader.targetOrder = pendingOrderFile.record.fileName
                 // ⚠ 模式必须一起传过去：开单页要**先切模式再放购物车**。
                 // 少了它，进货单会被塞进销售车，上传出去是一张计营收、扣库存的 B 类单。
-                PendingOrderLoader.mode = pendingOrderFile.record.modeOrSale
-                // ⚠ 模式必须跟着走：开单页要**先切模式再放购物车**。
                 PendingOrderLoader.mode = pendingOrderFile.record.modeOrSale
 
                 // 添加小延迟确保数据设置完成

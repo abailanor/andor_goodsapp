@@ -13,6 +13,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -195,22 +198,31 @@ fun MainScreen(locator: ServiceLocator, repository: ProductRepository) {
                 }
 
                 // 检查是否有待加载的待开单数据
-                LaunchedEffect(Unit) {
-                    if (PendingOrderLoader.hasData()) {
-                        val req = PendingOrderLoader.consume()
-                        val items = req.items
-                        val fileName = req.sourceFileName
-                        if (items != null && fileName != null) {
-                            // ⚠ 这里**不再**先调 clearOrder()：两辆车之后，clearOrder 清的是
-                            // "当前模式"那辆，而要加载的待开单可能是另一个模式 ——
-                            // 结果是白扔掉用户正在开的销售单，进货车反而是脏的。
-                            // loadPendingOrderItems 内部会先切模式、再整体覆盖那辆车。
-                            viewModel.loadPendingOrderItems(
-                                items = items,
-                                sourceFileName = fileName,
-                                targetFileName = req.targetOrder,
-                                mode = orderModeOf(req.mode),
-                            )
+                //
+                // ⚠ 不用 LaunchedEffect(Unit)：待开单页 navigate 回来时，order 是
+                // startDestination，launchSingleTop 会**复用栈底实例** —— composable
+                // 不重建、不重新组合，Unit key 的 Effect 不会重跑，结果是点了「开单」
+                // 却什么都没载入。repeatOnLifecycle 的 block 在每次页面回到 STARTED
+                //（含这种导航复用）时重启，才是可靠的检查点。
+                val lifecycleOwner = LocalLifecycleOwner.current
+                LaunchedEffect(lifecycleOwner) {
+                    lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        if (PendingOrderLoader.hasData()) {
+                            val req = PendingOrderLoader.consume()
+                            val items = req.items
+                            val fileName = req.sourceFileName
+                            if (items != null && fileName != null) {
+                                // ⚠ 这里**不再**先调 clearOrder()：两辆车之后，clearOrder 清的是
+                                // "当前模式"那辆，而要加载的待开单可能是另一个模式 ——
+                                // 结果是白扔掉用户正在开的销售单，进货车反而是脏的。
+                                // loadPendingOrderItems 内部会先切模式、再整体覆盖那辆车。
+                                viewModel.loadPendingOrderItems(
+                                    items = items,
+                                    sourceFileName = fileName,
+                                    targetFileName = req.targetOrder,
+                                    mode = orderModeOf(req.mode),
+                                )
+                            }
                         }
                     }
                 }
