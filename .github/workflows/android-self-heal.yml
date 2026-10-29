@@ -1,0 +1,80 @@
+name: Android CI with Self-Healing
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-heal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Gemini SDK
+        run: pip install google-genai
+
+      - name: Run Build with Auto-Healing Loop
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MAX_RETRIES=3
+          COUNT=0
+
+          while [ $COUNT -lt $MAX_RETRIES ]; do
+            echo "==== 开始第 $((COUNT+1)) 次编译尝试 ===="
+            
+            # 执行编译并将输出重定向至 build.log
+            if ./gradlew assembleDebug --stacktrace > build.log 2>&1; then
+              echo "✅ 编译成功！"
+              exit 0
+            else
+              echo "❌ 编译失败，正在触发 Gemini 自动修复..."
+              COUNT=$((COUNT+1))
+              
+              if [ $COUNT -ge $MAX_RETRIES ]; then
+                echo "⚠️ 已达最大重试次数 ($MAX_RETRIES 次)，停止自愈。"
+                cat build.log | tail -n 50
+                exit 1
+              fi
+
+              # 运行 Python 脚本：让 Gemini 分析 build.log 并修改代码
+              python .github/scripts/auto_heal.py build.log
+              
+              # 检查是否有文件改动，若改动了则提交并继续循环
+              if [ -n "$(git status --porcelain)" ]; then
+                git config user.name "Gemini-Bot"
+                git config user.email "gemini-bot@github.actions"
+                git add .
+                git commit -m "fix(auto-heal): Gemini 自动修复编译错误 (尝试 $COUNT)"
+              else
+                echo "Gemini 未做出有效改动，终止循环。"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Push Auto-fixed Branch (如果产生过自动修复)
+        if: always()
+        run: |
+          # 如果本地比远程有新提交，推送到 fix-by-gemini 分支供审阅
+          git push origin HEAD:refs/heads/fix-by-gemini --force || true
